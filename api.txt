@@ -1,0 +1,290 @@
+Tinker API documentation summary
+This report summarises the key API functions, classes and workflows described in the official Tinker documentation hosted at https://tinker‑docs.thinkingmachines.ai/. Tinker is a platform for fine‑tuning large language models (LLMs) through supervised learning (SL) and reinforcement learning (RL). The documentation is divided into a “Using the Tinker API” section that introduces core concepts such as installation, training, loss functions and saving/loading, and a “Tinker Cookbook” section that provides recipes for supervised learning, reinforcement learning, preferences, evaluations and other advanced topics.
+Installation and basic usage
+Installing Tinker: The Python SDK can be installed using pip:
+
+ pip install tinker
+ The Tinker cookbook (a companion repository containing example training scripts) can be installed locally for editing and exploration by cloning the tinker‑cookbook repository and doing an editable installtinker-docs.thinkingmachines.ai.
+
+
+API key: You must sign up through the Tinker waitlist and create an API key through the Tinker consoletinker-docs.thinkingmachines.ai. Set the key using the TINKER_API_KEY environment variable before running any training scriptstinker-docs.thinkingmachines.ai.
+
+
+Service and training clients: The main entry points to the API are:
+
+
+Client
+Purpose
+Example
+ServiceClient
+Interface for model discovery and creating training and sampling clients. Use service_client.get_server_capabilities().supported_models to list available base modelstinker-docs.thinkingmachines.ai.
+```python
+
+
+
+
+import tinker
+ service_client = tinker.ServiceClient()
+ print([m.model_name for m in service_client.get_server_capabilities().supported_models])
+ | `TrainingClient` | Represents a fine‑tuned model that you can train and sample from.  Create it using `service_client.create_lora_training_client(base_model=...)`:contentReference[oaicite:4]{index=4}. | ```python
+base_model = "Qwen/Qwen3-30B-A3B-Base"
+training_client = service_client.create_lora_training_client(base_model=base_model)
+``` |
+  | `SamplingClient` | Used for sampling from a trained model.  Can be created directly via `service_client.create_sampling_client(model_path=...)` or by saving weights from a training client and obtaining a sampling client in one call:contentReference[oaicite:5]{index=5}. | |
+
+* **Core API functions:**  Training and inference revolve around a few functions:
+
+  | Function | Client | Description |
+  | --- | --- | --- |
+  | `forward_backward` / `forward_backward_async` | `TrainingClient` | Performs a forward and backward pass on a batch of examples.  Accepts a list of `Datum` objects containing `model_input` and loss‑specific tensors.  Returns a `ForwardBackwardOutput` object containing output tensors and diagnostics:contentReference[oaicite:6]{index=6}. |
+  | `optim_step` / `optim_step_async` | `TrainingClient` | Applies accumulated gradients to update model weights after one or more calls to `forward_backward` (not explicitly shown in the docs but implied in training loops). |
+  | `sample` / `sample_async` | `SamplingClient` | Generates output sequences from the model given a prompt.  Used for inference and evaluation:contentReference[oaicite:7]{index=7}. |
+  | `save_weights_for_sampler` | `TrainingClient` | Saves a lightweight copy of model weights for sampling only.  Returns a persistent path such as `tinker://<model_id>/<name>`:contentReference[oaicite:8]{index=8}. |
+  | `save_state` / `load_state` | `TrainingClient` | Saves or loads full model and optimizer state for checkpointing and resuming training:contentReference[oaicite:9]{index=9}. |
+  | `save_weights_and_get_sampling_client` | `TrainingClient` | Convenience method that saves weights and returns a `SamplingClient` in one call:contentReference[oaicite:10]{index=10}. |
+
+* **Sync vs async:**  Every method in the Tinker library has synchronous and asynchronous versions.  Async methods end with `_async` and return a `Future` object.  You typically call `await future` to get the result:contentReference[oaicite:11]{index=11}.  Use the async API for high‑performance workflows that overlap multiple network calls:contentReference[oaicite:12]{index=12}.
+
+## Training and sampling workflow
+
+The quick‑start example shows how to perform a basic training update and sample from a model:
+
+1. **Create a training client** for a base model via the `ServiceClient`:contentReference[oaicite:13]{index=13}.
+2. **Prepare training data** by tokenising input–output examples.  A helper function converts an example (e.g., translating English to Pig Latin) into input tokens, target tokens and weights:contentReference[oaicite:14]{index=14}.
+3. **Call `forward_backward`** with a list of `Datum` objects that contain the training tokens and any loss‑specific inputs:contentReference[oaicite:15]{index=15}.
+4. **Call `optim_step`** to update the model’s parameters.
+5. **Save the model or sample** from it using `save_weights_for_sampler` or by creating a `SamplingClient`:contentReference[oaicite:16]{index=16}.
+6. **Generate output** from the model using the sampling client’s `sample` method, optionally specifying stop sequences with a renderer:contentReference[oaicite:17]{index=17}.
+
+## Loss functions
+
+Tinker provides built‑in loss functions for common objectives:
+
+* `cross_entropy` – supervised learning objective (negative log‑likelihood).  Input tensors: `target_tokens` (target token IDs) and `weights` (per‑token weights).  Output includes log probabilities and the summed loss:contentReference[oaicite:18]{index=18}.
+* `importance_sampling` – policy‑gradient objective that corrects for differences between the sampling distribution `q` and the current policy `p`:contentReference[oaicite:19]{index=19}.  Inputs include `target_tokens`, `logprobs` (log‑probabilities from the sampler) and `advantages`:contentReference[oaicite:20]{index=20}.
+* `ppo` – Proximal Policy Optimization objective (described further down the loss page) with clipping to improve stability:contentReference[oaicite:21]{index=21}.
+
+When the built‑in losses are insufficient, `forward_backward_custom` allows users to supply their own differentiable loss functions at the cost of an extra forward pass:contentReference[oaicite:22]{index=22}.
+
+## Saving and loading
+
+Checkpoints are essential for long‑running training jobs:
+
+* **Saving weights for sampling:** `save_weights_for_sampler(name)` saves a lightweight copy of the model weights to a persistent path.  You can then create a `SamplingClient` from the returned path or call `save_weights_and_get_sampling_client(name)` to get a sampling client directly:contentReference[oaicite:23]{index=23}.
+* **Saving and loading full state:** `save_state(name)` saves both weights and optimizer state, while `load_state(path)` restores them.  Use these functions to resume training after interruption or to change hyperparameters mid‑run:contentReference[oaicite:24]{index=24}.
+* **When to use each:** save weights for sampling when you only need to test the model; save and load full state when you want to resume training with momentum, learning‑rate schedules or other optimizer state:contentReference[oaicite:25]{index=25}.
+
+## Async, futures and performance
+
+Tinker’s API supports concurrency via asynchronous methods:
+
+* The async variants of core methods (`create_lora_training_client_async`, `forward_backward_async`, `sample_async`, etc.) return `Future` objects that must be awaited twice: first to ensure the request is enqueued, and second to wait for completion:contentReference[oaicite:26]{index=26}.
+* For best throughput, overlap requests by submitting the next request before waiting for the previous one to finish.  Example:
+  
+  ```python
+future1 = await client.forward_backward_async(batch1, loss_fn)
+future2 = await client.forward_backward_async(batch2, loss_fn)
+result1 = await future1
+result2 = await future2
+
+This pattern ensures that training runs make use of Tinker’s discrete clock cyclestinker-docs.thinkingmachines.ai.
+Available models
+Tinker currently supports models from the Qwen and Llama series. The documentation recommends using mixture‑of‑experts (MoE) models for cost‑effective fine‑tuning, and lists the following models with their training type, architecture and sizetinker-docs.thinkingmachines.ai:
+Model
+Training type
+Architecture
+Size
+Qwen/Qwen3‑235B‑A22B‑Instruct‑2507
+⚡ Instruction
+MoE
+Large
+Qwen/Qwen3‑30B‑A3B‑Instruct‑2507
+⚡ Instruction
+MoE
+Medium
+Qwen/Qwen3‑30B‑A3B
+Hybrid
+MoE
+Medium
+Qwen/Qwen3‑30B‑A3B‑Base
+Base
+MoE
+Medium
+Qwen/Qwen3‑32B
+Hybrid
+Dense
+Medium
+Qwen/Qwen3‑8B
+Hybrid
+Dense
+Small
+Qwen/Qwen3‑8B‑Base
+Base
+Dense
+Small
+Qwen/Qwen3‑4B‑Instruct‑2507
+⚡ Instruction
+Dense
+Compact
+meta‑llama/Llama‑3.1‑70B
+Base
+Dense
+Large
+meta‑llama/Llama‑3.3‑70B‑Instruct
+⚡ Instruction
+Dense
+Large
+meta‑llama/Llama‑3.1‑8B
+Base
+Dense
+Small
+meta‑llama/Llama‑3.1‑8B‑Instruct
+⚡ Instruction
+Dense
+Small
+meta‑llama/Llama‑3.2‑3B
+Base
+Dense
+Compact
+meta‑llama/Llama‑3.2‑1B
+Base
+Dense
+Compact
+
+Use a base model when doing research or if you plan to implement the full post‑training pipeline yourself; use instruction‑tuned or hybrid models when latency or reasoning ability is more importanttinker-docs.thinkingmachines.ai.
+Rendering and tokenisation
+A Renderer converts conversational messages into token sequences and vice versa. It supports both inference and training:
+Inference: To sample messages from a model you need three methods: build_generation_prompt (constructs a prompt from a conversation), get_stop_sequences (returns stop token IDs), and parse_response (converts generated tokens back into a message)tinker-docs.thinkingmachines.ai.
+
+
+Training: Renderers also build supervised training examples, returning token IDs and weights used in the Datum objects consumed by forward_backwardtinker-docs.thinkingmachines.ai.
+
+
+Implementation: The main Renderer class is defined in renderers.py and can be obtained via renderers.get_renderer(renderer_name, tokenizer)tinker-docs.thinkingmachines.ai. It works with a tokenizer obtained from the TrainingClient.
+
+
+LoRA primer
+Tinker uses Low‑Rank Adaptation (LoRA) rather than full fine‑tuning. LoRA trains a low‑rank matrix B×A and adds it to the base model weights. Key points include:
+LoRA performs similarly to full fine‑tuning for small‑ to medium‑sized instruction‑tuning and reasoning datasetstinker-docs.thinkingmachines.ai.
+
+
+LoRA underperforms on large datasets because it has less capacity to memorise large amounts of datatinker-docs.thinkingmachines.ai.
+
+
+LoRA may be less tolerant of large batch sizes; increasing the LoRA rank does not fully mitigate thistinker-docs.thinkingmachines.ai.
+
+
+LoRA gives equivalent performance to full fine‑tuning for reinforcement learning with small rankstinker-docs.thinkingmachines.ai.
+
+
+The default LoRA rank in Tinker is 32tinker-docs.thinkingmachines.ai. Use a larger rank when fine‑tuning on large datasets or ensure that the number of LoRA parameters is at least as large as the number of weighted tokenstinker-docs.thinkingmachines.ai.
+
+
+LoRA requires a much higher learning rate than full fine‑tuning (20–100× higher). A helper function get_lora_lr_over_full_finetune_lr(model_name) computes the recommended scale factortinker-docs.thinkingmachines.ai.
+
+
+Supervised learning (SL)
+The Supervised Learning cookbook guides users through common fine‑tuning tasks:
+Basic SL: Use python -m tinker_cookbook.recipes.sl_basic to fine‑tune a base model (e.g., Llama‑3.1‑8B) on the NoRobots datasettinker-docs.thinkingmachines.ai. The script prints train and test loss during training and writes logs and checkpoints to a log_path directorytinker-docs.thinkingmachines.ai.
+
+
+SL training loop: A simplified training loop is provided in sl_loop.py for people who want to write custom loops or understand the core operations. A more performant version is available in supervised/train.pytinker-docs.thinkingmachines.ai.
+
+
+SL hyperparameters: The recommended learning rate for a model m is given by lr_base × M_lora × (H_m/2000)^P_m, where lr_base≈5e‑5, M_lora=10 for LoRA and 1 for full fine‑tuning, H_m is the hidden size and P_m is a model‑specific exponenttinker-docs.thinkingmachines.ai. A helper function get_lr(model_name) returns the recommended LRtinker-docs.thinkingmachines.ai. Smaller batch sizes often yield better performance; aim for at least 100 steps of training and consider sweeping the LR around the default valuetinker-docs.thinkingmachines.ai.
+
+
+Prompt distillation: Train a student model to behave as though it had seen a long prompt by generating a distilled dataset of (query, response) pairs from a teacher modeltinker-docs.thinkingmachines.ai. Steps include creating distillation data, training the student model and testing it. The example given uses a language classification task with a few‑shot teacher prompttinker-docs.thinkingmachines.ai.
+
+
+Sweep case study: Demonstrates how to sweep the learning rate to find task‑specific optimum values by running multiple training jobs with different LR settings and comparing final lossestinker-docs.thinkingmachines.ai.
+
+
+Reinforcement learning (RL)
+Tinker supports reinforcement learning through a flexible environment and completer abstraction:
+Basic concepts: RL optimises a model based on a reward function rather than explicit target tokens. Two broad RL settings are supported:
+
+
+RL with verifiable rewards (RLVR) – the reward is computed programmatically by checking the candidate output against reference answers or unit teststinker-docs.thinkingmachines.ai.
+
+
+RL on human feedback (RLHF) – the reward comes from human preferences. Tinker includes an RLHF pipeline for preference optimisationtinker-docs.thinkingmachines.ai.
+
+
+First RL run: The minimal RL script rl_basic.py fine‑tunes Llama‑3.1‑8B on the GSM8K dataset with a reward function based on answer correctness and formattingtinker-docs.thinkingmachines.ai. The script logs metrics such as accuracy, reward and KL divergencetinker-docs.thinkingmachines.ai.
+
+
+Environments: To create custom RL tasks you implement the Env interface (with initial_observation and step methods) and build EnvGroupBuilder and RLDataset classes. This modular design allows multiple environments and multi‑agent trainingtinker-docs.thinkingmachines.ai. An example environment is provided in the “Twenty Questions” recipetinker-docs.thinkingmachines.ai.
+
+
+RL training loop: A simple RL training loop is provided in rl_loop.py. A more performant version is in rl/train.py with periodic evaluationstinker-docs.thinkingmachines.ai. Run the loop using python -m tinker_cookbook.recipes.rl_looptinker-docs.thinkingmachines.ai.
+
+
+RL hyperparameters:
+
+
+Learning rate: Similar guidance to supervised learning; start with the recommended LR and adjust as neededtinker-docs.thinkingmachines.ai.
+
+
+Batch size and group size: batch_size is the number of unique environments per update; group_size is the number of rollouts per environment. Scale the learning rate proportionally to the batch sizetinker-docs.thinkingmachines.ai.
+
+
+Number of substeps (num_substeps): Controls how many optimiser updates are performed per sampling iteration. Higher values can improve sample efficiency but may require smaller learning ratestinker-docs.thinkingmachines.ai.
+
+
+Advanced configurations: The documentation describes streaming minibatch training and asynchronous off‑policy training for improved throughput. These are experimental and involve complex configurations such as StreamMinibatchConfig and AsyncConfigtinker-docs.thinkingmachines.ai. Monitoring KL divergence between sampling and training policies is important for stabilitytinker-docs.thinkingmachines.ai.
+
+
+Preferences, DPO and RLHF
+Learning from preferences: When you have pairwise comparison data (one response preferred over another), you can either:
+
+
+Direct Preference Optimization (DPO) – directly optimise the policy to prefer chosen responses over rejected ones without learning a separate reward modeltinker-docs.thinkingmachines.ai.
+
+
+Reinforcement Learning from Human Feedback (RLHF) – train a separate reward model on the preference data and then do RL with that reward modeltinker-docs.thinkingmachines.ai.
+
+
+DPO guide: DPO minimises a classification loss that encourages the policy to assign higher probability to chosen responses. The loss involves the log ratio between the current policy and a reference policy weighted by a hyperparameter βtinker-docs.thinkingmachines.ai. Training is performed via train_dpo.py and requires specifying parameters such as model_name, dataset, renderer_name, learning rate and dpo_betatinker-docs.thinkingmachines.ai. Common datasets include Anthropic’s HHH, NVIDIA’s HelpSteer3 and UltraFeedbacktinker-docs.thinkingmachines.ai.
+
+
+RLHF worked example: The RLHF pipeline trains an initial policy via supervised learning, a preference model via supervised learning on pairwise comparisons, and then uses RL to optimise the policy with respect to the preference modeltinker-docs.thinkingmachines.ai. Scripts in rlhf_pipeline.py implement this processtinker-docs.thinkingmachines.ai.
+
+
+Evaluations
+Tinker provides mechanisms for evaluating models during and after training:
+Inline evaluations: You can configure EvaluatorBuilder objects in training configurations to run evaluations every eval_every steps for supervised learning and RLtinker-docs.thinkingmachines.ai.
+
+
+Offline evaluations: The cookbook supports running standard evaluations using the Inspect AI library. A script is provided to evaluate model checkpoints on tasks such as inspect_evals/ifeval and inspect_evals/mmlu_0_shottinker-docs.thinkingmachines.ai.
+
+
+Custom evaluations: You can create custom tasks using Inspect AI or implement your own SamplingClientEvaluator. The documentation provides a code snippet showing how to set up a simple question–answer evaluation using Tinker’s sampling API and Inspect AItinker-docs.thinkingmachines.ai.
+
+
+Completers and developer tips
+Completers: Policies are implemented as Completers. There are two main interfaces:
+
+
+TokenCompleter(model_input: ModelInput, stop: StopCondition) -> TokensWithLogprobs – used by RL algorithms because it operates on tokenstinker-docs.thinkingmachines.ai.
+
+
+MessageCompleter(messages: list[Message]) -> Message – used for higher‑level message‑based samplingtinker-docs.thinkingmachines.ai.
+ The Tinker cookbook provides concrete implementations TinkerTokenCompleter and TinkerMessageCompleter, which wrap a SamplingClienttinker-docs.thinkingmachines.ai.
+
+
+Developer tips: To assist development, the docs provide single‑file versions (llms.txt and llms‑full.txt) that can be fed into language models for contexttinker-docs.thinkingmachines.ai.
+
+
+Navigating the docs and cookbook
+The documentation is organised into two halvestinker-docs.thinkingmachines.ai:
+Using the Tinker API: Contains fundamentals such as installation, training & sampling, loss functions, saving & loading, async methods, and the model lineup. These sections explain how to set up training, design loss functions and manage model statetinker-docs.thinkingmachines.ai.
+
+
+Tinker Cookbook: Provides recipes for rendering, supervised learning (including hyperparameters, prompt distillation and sweeps), reinforcement learning (including environment design, training loops and hyperparameters), preference learning (DPO and RLHF), evaluations, completers and developer tipstinker-docs.thinkingmachines.ai.
+
+
+Conclusion
+The Tinker API gives researchers and developers fine‑grained control over LLM fine‑tuning while abstracting away the complexity of distributed training. Its modular design—built around ServiceClient, TrainingClient, SamplingClient and flexible renderers—allows you to construct custom training loops, implement supervised and reinforcement learning pipelines, and incorporate preference data. Built‑in loss functions, asynchronous operations, checkpoints and evaluation tools make it practical to train and deploy models at scale. The Tinker Cookbook supplements the API with ready‑to‑run scripts for common tasks, recommended hyperparameters, and best practices for LoRA, RL and preference‑learning experiments.
+
+

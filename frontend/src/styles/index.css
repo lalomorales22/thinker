@@ -1,0 +1,176 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-obsidian-border;
+  }
+
+  body {
+    @apply bg-obsidian-bg text-tactical-text-primary font-sans antialiased;
+  }
+
+  code {
+    @apply font-mono;
+  }
+
+  /* Tactical scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-obsidian-surface;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-obsidian-border rounded-tactical-sm;
+    border: 1px solid rgba(0, 217, 255, 0.1);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-obsidian-hover;
+    border-color: rgba(0, 217, 255, 0.3);
+  }
+}
+
+@layer components {
+  /* Tactical LED Indicators - Full spectrum */
+  .led {
+    @apply w-2 h-2 rounded-full inline-block animate-pulse-slow;
+  }
+
+  .led-cyan { @apply bg-led-cyan; box-shadow: 0 0 8px theme('colors.led.cyan'); }
+  .led-blue { @apply bg-led-blue; box-shadow: 0 0 8px theme('colors.led.blue'); }
+  .led-purple { @apply bg-led-purple; box-shadow: 0 0 8px theme('colors.led.purple'); }
+  .led-magenta { @apply bg-led-magenta; box-shadow: 0 0 8px theme('colors.led.magenta'); }
+  .led-red { @apply bg-led-red; box-shadow: 0 0 8px theme('colors.led.red'); }
+  .led-orange { @apply bg-led-orange; box-shadow: 0 0 8px theme('colors.led.orange'); }
+  .led-yellow { @apply bg-led-yellow; box-shadow: 0 0 8px theme('colors.led.yellow'); }
+  .led-lime { @apply bg-led-lime; box-shadow: 0 0 8px theme('colors.led.lime'); }
+  .led-green { @apply bg-led-green; box-shadow: 0 0 8px theme('colors.led.green'); }
+  .led-emerald { @apply bg-led-emerald; box-shadow: 0 0 8px theme('colors.led.emerald'); }
+  .led-teal { @apply bg-led-teal; box-shadow: 0 0 8px theme('colors.led.teal'); }
+
+  /* Obsidian Widget Panels */
+  .tactical-panel {
+    @apply bg-obsidian-surface/90 backdrop-blur-tactical border border-obsidian-border rounded-tactical shadow-tactical;
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.02), transparent);
+  }
+
+  .tactical-panel-header {
+    @apply px-4 py-2.5 border-b border-obsidian-border flex items-center justify-between;
+    background: linear-gradient(to right, rgba(0, 217, 255, 0.03), transparent);
+  }
+
+  .tactical-panel-elevated {
+    @apply bg-obsidian-elevated/90 backdrop-blur-tactical border border-obsidian-border rounded-tactical-lg shadow-tactical-lg;
+  }
+
+  /* Tactical Buttons */
+  .btn {
+    @apply px-4 py-2 rounded-tactical-sm font-medium transition-all duration-200 relative overflow-hidden;
+  }
+
+  .btn-primary {
+    @apply bg-tactical-primary/20 hover:bg-tactical-primary/30 text-tactical-primary border border-tactical-primary/50 hover:border-tactical-primary hover:shadow-glow-cyan;
+  }
+
+  .btn-secondary {
+    @apply bg-tactical-secondary/20 hover:bg-tactical-secondary/30 text-tactical-secondary border border-tactical-secondary/50 hover:border-tactical-secondary hover:shadow-glow-purple;
+  }
+
+  .btn-ghost {
+    @apply hover:bg-obsidian-hover text-tactical-text-secondary hover:text-tactical-text-primary border border-transparent hover:border-obsidian-border;
+  }
+
+  .btn-danger {
+    @apply bg-led-red/20 hover:bg-led-red/30 text-led-red border border-led-red/50 hover:border-led-red hover:shadow-glow-red;
+  }
+
+  .btn-success {
+    @apply bg-led-green/20 hover:bg-led-green/30 text-led-green border border-led-green/50 hover:border-led-green hover:shadow-glow-green;
+  }
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-sm;
+  }
+
+  .btn-xs {
+    @apply px-2 py-1 text-xs;
+  }
+
+  /* Tactical Inputs */
+  .input-tactical {
+    @apply bg-obsidian-surface/50 border border-obsidian-border rounded-tactical-sm px-3 py-2 text-tactical-text-primary placeholder-tactical-text-muted;
+    @apply focus:outline-none focus:ring-1 focus:ring-tactical-primary/50 focus:border-tactical-primary/50 transition-all;
+  }
+
+  .input-tactical option {
+    @apply bg-obsidian-elevated text-tactical-text-primary;
+  }
+
+  .input-field {
+    @apply w-full input-tactical text-sm;
+  }
+
+  select.input-tactical {
+    cursor: pointer;
+  }
+
+  /* Tactical Widget Cards */
+  .tactical-widget {
+    @apply tactical-panel p-4 hover:border-tactical-primary/30 transition-all duration-300;
+  }
+
+  .tactical-widget-glow {
+    @apply tactical-panel p-4 border-tactical-primary/30 shadow-inner-glow hover:shadow-glow-cyan transition-all duration-300;
+  }
+
+  /* Tactical Stat Card */
+  .stat-card {
+    @apply tactical-panel p-4 relative;
+  }
+
+  .stat-card::before {
+    content: '';
+    @apply absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-tactical-primary to-transparent rounded-l-tactical;
+  }
+
+  /* Terminal Style */
+  .terminal {
+    @apply bg-black/80 backdrop-blur-tactical border border-obsidian-border rounded-tactical p-3 font-mono text-sm;
+    @apply text-led-cyan;
+  }
+
+  .terminal-output {
+    @apply text-tactical-text-secondary text-xs font-mono leading-relaxed;
+  }
+
+  /* Progress Bar */
+  .progress-bar {
+    @apply h-1.5 bg-obsidian-hover rounded-full overflow-hidden relative;
+  }
+
+  .progress-fill {
+    @apply h-full bg-gradient-to-r from-tactical-primary to-tactical-accent transition-all duration-500;
+    box-shadow: 0 0 10px rgba(0, 217, 255, 0.5);
+  }
+
+  /* Glow Text */
+  .text-glow-cyan {
+    text-shadow: 0 0 10px rgba(0, 217, 255, 0.6);
+  }
+
+  .text-glow-purple {
+    text-shadow: 0 0 10px rgba(168, 85, 247, 0.6);
+  }
+}
+
+@layer utilities {
+  .text-glow {
+    text-shadow: 0 0 10px rgba(24, 144, 255, 0.5);
+  }
+}
