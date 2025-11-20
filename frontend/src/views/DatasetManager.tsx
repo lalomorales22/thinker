@@ -1,5 +1,6 @@
 import { Upload, Trash2, Eye, Database, Download } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { useStore } from '../store/useStore'
 
 interface Dataset {
   id: string
@@ -18,6 +19,8 @@ interface Dataset {
 }
 
 export default function DatasetManager() {
+  const backendUrl = useStore((state) => state.backendUrl)
+  const apiKey = useStore((state) => state.apiKey)
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null)
   const [showUploadModal, setShowUploadModal] = useState(false)
@@ -35,7 +38,11 @@ export default function DatasetManager() {
   useEffect(() => {
     const fetchDatasets = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/datasets/')
+        const response = await fetch(`${backendUrl}/api/datasets/`, {
+          headers: {
+            'X-API-Key': apiKey
+          }
+        })
         if (response.ok) {
           const data = await response.json()
           setDatasets(data.datasets)
@@ -49,7 +56,7 @@ export default function DatasetManager() {
     // Poll for updates
     const interval = setInterval(fetchDatasets, 5000)
     return () => clearInterval(interval)
-  }, [])
+  }, [backendUrl, apiKey])
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -75,8 +82,11 @@ export default function DatasetManager() {
     formData.append('test_split', testSplit)
 
     try {
-      const response = await fetch('http://localhost:8000/api/datasets/upload', {
+      const response = await fetch(`${backendUrl}/api/datasets/upload`, {
         method: 'POST',
+        headers: {
+          'X-API-Key': apiKey
+        },
         body: formData
       })
 

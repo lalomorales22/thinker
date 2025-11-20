@@ -1,7 +1,7 @@
 """
 Dataset management routes
 """
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header
 from pydantic import BaseModel
 from typing import List, Optional
 import os
@@ -41,9 +41,15 @@ async def upload_dataset(
     format: str = Form(...),
     train_split: int = Form(80),
     val_split: int = Form(15),
-    test_split: int = Form(5)
+    test_split: int = Form(5),
+    x_api_key: Optional[str] = Header(None)
 ):
     """Upload a new dataset"""
+    # Set API key if provided
+    api_key = x_api_key or os.getenv("TINKER_API_KEY")
+    if api_key:
+        os.environ["TINKER_API_KEY"] = api_key
+
     try:
         # Generate ID
         dataset_id = str(uuid.uuid4())

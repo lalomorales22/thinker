@@ -1,5 +1,6 @@
 import { Play, Pause, Trash2, Plus, Clock, Zap, TrendingUp, Server, Cpu, Activity, Target, Database as DatabaseIcon, Brain, GitBranch } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { useStore } from '../store/useStore'
 
 interface TrainingJob {
   id: string
@@ -17,6 +18,8 @@ interface TrainingJob {
 }
 
 export default function TrainingDashboard() {
+  const backendUrl = useStore((state) => state.backendUrl)
+  const apiKey = useStore((state) => state.apiKey)
   const [jobs, setJobs] = useState<TrainingJob[]>([])
   const [showNewJobModal, setShowNewJobModal] = useState(false)
 
@@ -33,7 +36,11 @@ export default function TrainingDashboard() {
   useEffect(() => {
     const fetchJobs = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/training/jobs')
+        const response = await fetch(`${backendUrl}/api/training/jobs`, {
+          headers: {
+            'X-API-Key': apiKey
+          }
+        })
         if (response.ok) {
           const data = await response.json()
           // Transform backend data to frontend interface if needed
@@ -61,13 +68,16 @@ export default function TrainingDashboard() {
     fetchJobs()
     const interval = setInterval(fetchJobs, 2000)
     return () => clearInterval(interval)
-  }, [])
+  }, [backendUrl, apiKey])
 
   const handleDeployJob = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/training/start', {
+      const response = await fetch(`${backendUrl}/api/training/start`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': apiKey
+        },
         body: JSON.stringify({
           model_name: baseModel,
           rank: parseInt(loraRank),

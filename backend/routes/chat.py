@@ -1,9 +1,10 @@
 """
 Chat/interaction routes for communicating with trained models
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
+import os
 
 router = APIRouter()
 
@@ -25,10 +26,15 @@ class ChatResponse(BaseModel):
     tokens_used: int
 
 @router.post("/completions")
-async def chat_completion(request: ChatRequest):
+async def chat_completion(request: ChatRequest, x_api_key: Optional[str] = Header(None)):
     """
     Send a chat request to a trained model
     """
+    # Set API key if provided
+    api_key = x_api_key or os.getenv("TINKER_API_KEY")
+    if api_key:
+        os.environ["TINKER_API_KEY"] = api_key
+
     # Initialize agent (in a real app, this might be a singleton or cached)
     agent = CodeReviewAgent(base_model=request.model_name)
     
@@ -70,10 +76,15 @@ async def chat_completion(request: ChatRequest):
     )
 
 @router.post("/review-code")
-async def review_code(code: str, language: str = "python", model_name: str = "code-reviewer-v1"):
+async def review_code(code: str, language: str = "python", model_name: str = "code-reviewer-v1", x_api_key: Optional[str] = Header(None)):
     """
     Specialized endpoint for code review
     """
+    # Set API key if provided
+    api_key = x_api_key or os.getenv("TINKER_API_KEY")
+    if api_key:
+        os.environ["TINKER_API_KEY"] = api_key
+
     agent = CodeReviewAgent(base_model=model_name)
     result = await agent.review_code(code, language)
     
