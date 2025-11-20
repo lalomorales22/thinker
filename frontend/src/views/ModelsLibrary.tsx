@@ -1,5 +1,6 @@
 import { Download, Trash2, Play, Copy, CheckCircle, Star, Package } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { useStore } from '../store/useStore'
 
 interface Model {
   id: string
@@ -19,6 +20,8 @@ interface Model {
 }
 
 export default function ModelsLibrary() {
+  const backendUrl = useStore((state) => state.backendUrl)
+  const apiKey = useStore((state) => state.apiKey)
   const [models, setModels] = useState<Model[]>([])
   const [selectedModel, setSelectedModel] = useState<Model | null>(null)
   const [copiedPath, setCopiedPath] = useState<string | null>(null)
@@ -43,7 +46,11 @@ export default function ModelsLibrary() {
     const fetchModels = async () => {
       try {
         // Fetch base models
-        const response = await fetch('http://localhost:8000/api/models/base/available')
+        const response = await fetch(`${backendUrl}/api/models/base/available`, {
+          headers: {
+            'X-API-Key': apiKey
+          }
+        })
         if (response.ok) {
           const data = await response.json()
           // Transform strings to Model objects
@@ -66,7 +73,7 @@ export default function ModelsLibrary() {
       }
     }
     fetchModels()
-  }, [])
+  }, [backendUrl, apiKey])
 
   const toggleFavorite = (id: string) => {
     setModels(models.map(m =>

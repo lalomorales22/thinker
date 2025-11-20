@@ -1,7 +1,7 @@
 """
 Model management routes - list available models, saved checkpoints, etc.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -39,14 +39,18 @@ async def get_model(model_name: str):
     return model
 
 @router.get("/base/available")
-async def list_base_models():
+async def list_base_models(x_api_key: Optional[str] = Header(None)):
     """List available base models from Tinker"""
     try:
         import tinker
-        # Check for API key
+        # Check for API key from header or environment
         import os
-        if not os.getenv("TINKER_API_KEY"):
+        api_key = x_api_key or os.getenv("TINKER_API_KEY")
+        if not api_key:
             raise ValueError("TINKER_API_KEY not set")
+
+        # Set API key for this request
+        os.environ["TINKER_API_KEY"] = api_key
             
         service_client = tinker.ServiceClient()
         # Note: get_server_capabilities might be async or sync depending on SDK version, 

@@ -1,11 +1,12 @@
 """
 Training routes for starting, monitoring, and managing training jobs
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Header
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import asyncio
 from datetime import datetime
+import os
 
 router = APIRouter()
 
@@ -32,8 +33,13 @@ class TrainingJob(BaseModel):
     metrics: Dict[str, Any] = {}
 
 @router.post("/start")
-async def start_training(config: TrainingConfig, background_tasks: BackgroundTasks):
+async def start_training(config: TrainingConfig, background_tasks: BackgroundTasks, x_api_key: Optional[str] = Header(None)):
     """Start a new training job"""
+    # Set API key if provided
+    api_key = x_api_key or os.getenv("TINKER_API_KEY")
+    if api_key:
+        os.environ["TINKER_API_KEY"] = api_key
+
     job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     job = TrainingJob(

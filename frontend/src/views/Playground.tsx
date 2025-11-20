@@ -1,6 +1,7 @@
 import { Send, RotateCcw, Copy, ThumbsUp, ThumbsDown, Zap, Settings, MessageSquare, Loader2 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import Editor from '@monaco-editor/react'
+import { useStore } from '../store/useStore'
 
 interface Message {
   id: string
@@ -15,6 +16,8 @@ interface Message {
 }
 
 export default function Playground() {
+  const backendUrl = useStore((state) => state.backendUrl)
+  const apiKey = useStore((state) => state.apiKey)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
@@ -30,7 +33,11 @@ export default function Playground() {
   useEffect(() => {
     const fetchModels = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/models/base/available')
+        const response = await fetch(`${backendUrl}/api/models/base/available`, {
+          headers: {
+            'X-API-Key': apiKey
+          }
+        })
         if (response.ok) {
           const data = await response.json()
           setAvailableModels(data.models)
@@ -45,7 +52,7 @@ export default function Playground() {
       }
     }
     fetchModels()
-  }, [])
+  }, [backendUrl, apiKey])
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -75,10 +82,11 @@ export default function Playground() {
     const startTime = Date.now()
 
     try {
-      const response = await fetch('http://localhost:8000/api/chat/completions', {
+      const response = await fetch(`${backendUrl}/api/chat/completions`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'X-API-Key': apiKey
         },
         body: JSON.stringify({
           model_name: selectedModel,
@@ -109,10 +117,20 @@ export default function Playground() {
       }
     } catch (error) {
       console.error('Chat error:', error)
+      let errorMsg = "Sorry, I encountered an error processing your request."
+
+      if (!apiKey) {
+        errorMsg = "⚠️ API Key not set! Please go to Settings (top right) and enter your Tinker API key."
+      } else if (!backendUrl) {
+        errorMsg = "⚠️ Backend URL not configured! Please check Settings."
+      } else {
+        errorMsg = "❌ Error communicating with backend. Please ensure:\n1. Backend is running\n2. API key is correct\n3. Backend URL is correct"
+      }
+
       const errorMessage: Message = {
         id: `msg_${Date.now()}_err`,
         role: 'assistant',
-        content: "Sorry, I encountered an error processing your request. Please ensure the backend is running and the API key is set.",
+        content: errorMsg,
         timestamp: new Date().toLocaleTimeString()
       }
       setMessages(prev => [...prev, errorMessage])
@@ -122,9 +140,18 @@ export default function Playground() {
   }
 
   return (
-    <div className="h-full flex bg-obsidian-bg">
-      {/* Left Panel - Code Editor */}
-      <div className="flex-1 flex flex-col border-r border-obsidian-border">
+    <div className="h-full flex flex-col bg-obsidian-bg">
+      {/* API Key Warning Banner */}
+      {!apiKey && (
+        <div className="bg-yellow-500/20 border-b border-yellow-500/50 px-4 py-2 text-sm text-yellow-200 flex items-center gap-2">
+          <span>⚠️</span>
+          <span>API Key not set! Please configure your Tinker API key in Settings to use the playground.</span>
+        </div>
+      )}
+
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left Panel - Code Editor */}
+        <div className="flex-1 flex flex-col border-r border-obsidian-border">
         <div className="tactical-panel-header">
           <div className="flex items-center gap-2">
             <span className="led led-teal"></span>
@@ -331,6 +358,7 @@ export default function Playground() {
             {isLoading && <span className="text-brain-blue-400 animate-pulse">Thinking...</span>}
           </p>
         </div>
+      </div>
       </div>
     </div>
   )
