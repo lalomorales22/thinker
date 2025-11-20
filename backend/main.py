@@ -2,6 +2,15 @@
 Thinker Backend - FastAPI server for Self-Evolving Code Review Agent
 """
 import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+import warnings
+# Suppress Pydantic warnings from Tinker SDK
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -10,7 +19,7 @@ import uvicorn
 from typing import List
 import asyncio
 
-from routes import training, models, chat
+from routes import training, models, chat, datasets
 from agents.code_review_agent import CodeReviewAgent
 
 # WebSocket manager
@@ -53,7 +62,7 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -63,6 +72,7 @@ app.add_middleware(
 app.include_router(training.router, prefix="/api/training", tags=["training"])
 app.include_router(models.router, prefix="/api/models", tags=["models"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
 
 @app.get("/")
 async def root():

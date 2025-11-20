@@ -1,5 +1,5 @@
 import { Download, Trash2, Play, Copy, CheckCircle, Star, Package } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 interface Model {
   id: string
@@ -37,6 +37,36 @@ export default function ModelsLibrary() {
     setCopiedPath(path)
     setTimeout(() => setCopiedPath(null), 2000)
   }
+
+  // Fetch models
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        // Fetch base models
+        const response = await fetch('http://localhost:8000/api/models/base/available')
+        if (response.ok) {
+          const data = await response.json()
+          // Transform strings to Model objects
+          const fetchedModels: Model[] = data.models.map((name: string, index: number) => ({
+            id: `base-${index}`,
+            name: name.split('/').pop() || name,
+            baseModel: name,
+            type: 'base',
+            size: 'Unknown', // Could parse from name
+            checkpointPath: name,
+            trainingSteps: 0,
+            performance: {},
+            createdAt: new Date().toISOString().split('T')[0],
+            isFavorite: false
+          }))
+          setModels(fetchedModels)
+        }
+      } catch (error) {
+        console.error('Failed to fetch models:', error)
+      }
+    }
+    fetchModels()
+  }, [])
 
   const toggleFavorite = (id: string) => {
     setModels(models.map(m =>
@@ -76,11 +106,10 @@ export default function ModelsLibrary() {
               {models.map((model) => (
                 <div
                   key={model.id}
-                  className={`bg-dark-surface border rounded-ide p-4 cursor-pointer transition-all ${
-                    selectedModel?.id === model.id
-                      ? 'border-brain-blue-500 ring-1 ring-brain-blue-500/50'
-                      : 'border-dark-border hover:border-brain-blue-500/50'
-                  }`}
+                  className={`bg-dark-surface border rounded-ide p-4 cursor-pointer transition-all ${selectedModel?.id === model.id
+                    ? 'border-brain-blue-500 ring-1 ring-brain-blue-500/50'
+                    : 'border-dark-border hover:border-brain-blue-500/50'
+                    }`}
                   onClick={() => setSelectedModel(model)}
                 >
                   <div className="flex items-start justify-between mb-3">
@@ -94,11 +123,10 @@ export default function ModelsLibrary() {
                           }}
                         >
                           <Star
-                            className={`w-4 h-4 ${
-                              model.isFavorite
-                                ? 'fill-yellow-400 text-yellow-400'
-                                : 'text-dark-text-secondary'
-                            }`}
+                            className={`w-4 h-4 ${model.isFavorite
+                              ? 'fill-yellow-400 text-yellow-400'
+                              : 'text-dark-text-secondary'
+                              }`}
                           />
                         </button>
                       </div>

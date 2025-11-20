@@ -1,0 +1,137 @@
+
+Tinker SDK API Information
+
+Installation
+------------
+
+Install the Tinker SDK using pip:
+
+    pip install tinker
+
+Installation provides access to two components: the Python SDK and the tinker CLIhttps://tinker-docs.thinkingmachines.ai/install#:~:text=Installing%20Tinker. The Python SDK exposes low‑level operations such as `forward_backward`, `sample`, `optim_step`, and `save_state`https://tinker-docs.thinkingmachines.ai/install#:~:text=Installing%20Tinker. The tinker CLI (`tinker` or `python -m tinker`) offers management functionality similar to the web console and its commands can be listed with `tinker --help`https://tinker-docs.thinkingmachines.ai/install#:~:text=. To use the Tinker SDK you need an API key, which you can obtain by signing up through the waitlist and creating a key from the console; set the `TINKER_API_KEY` environment variable to your API keyhttps://tinker-docs.thinkingmachines.ai/install#:~:text=Getting%20an%20API%20key.
+
+Training and Sampling
+---------------------
+
+The main object used for training is the `TrainingClient`, which corresponds to a fine‑tuned model you can train and sample fromhttps://tinker-docs.thinkingmachines.ai/training-sampling#:~:text=The%20main%20object%20we%27ll%20be,can%20train%20and%20sample%20from. To start, set your Tinker API key in your environment (`export TINKER_API_KEY=<your key>`), create a `ServiceClient`, and inspect available models using `service_client.get_server_capabilities().supported_models`https://tinker-docs.thinkingmachines.ai/training-sampling#:~:text=The%20main%20object%20we%27ll%20be,can%20train%20and%20sample%20from. Choose a base model (e.g., `"Qwen/Qwen3-30B-A3B-Base"`) and create a LoRA training client:
+
+```python
+service_client = tinker.ServiceClient()
+training_client = service_client.create_lora_training_client(base_model="Qwen/Qwen3-30B-A3B-Base")
+```
+
+Preparing Training Data
+-----------------------
+
+To fine‑tune a model, convert your examples into the format expected by Tinker. Each example is represented as a `Datum` with a `model_input` sequence and a dictionary of `loss_fn_inputs`https://tinker-docs.thinkingmachines.ai/training-sampling#:~:text=,client%20from%20tinker%20import%20types. You can use the training client’s tokenizer to convert prompts and completions into tokens, assign weights (0 for prompt tokens, 1 for completion tokens), and create `types.Datum` objectshttps://tinker-docs.thinkingmachines.ai/training-sampling#:~:text=,English%3A%20%7Bexample%5B%27input%27%5D%7D%5Cn%20Pig%20Latin. After processing examples, you can visualize input tokens, targets, and weights for debugginghttps://tinker-docs.thinkingmachines.ai/training-sampling#:~:text=print%28f%22%7B%27Input%27%3A%3C20%7D%20%7B%27Target%27%3A%3C20%7D%20%7B%27Weight%27%3A%3C10%7D%22%29%20print%28%22,repr%28tokenizer.decode%28%5Binp%5D%29%29%3A%3C20%7D%20%7Brepr%28tokenizer.decode%28%5Btgt%5D%29%29%3A%3C20%7D%20%7Bwgt%3A%3C10.
+
+Performing a Training Update
+----------------------------
+
+Perform updates by calling `forward_backward` followed by `optim_step` in a loop. Each call returns a future; wait for results using `.result()`https://tinker-docs.thinkingmachines.ai/training-sampling#:~:text=Now%20we%20can%20use%20this,a%20good%20way%20to%20train. Submitting both operations before waiting can improve speedhttps://tinker-docs.thinkingmachines.ai/training-sampling#:~:text=Now%20we%20can%20use%20this,a%20good%20way%20to%20train. For example:
+
+```python
+for _ in range(6):
+    fwdbwd_future = training_client.forward_backward(processed_examples, "cross_entropy")
+    optim_future  = training_client.optim_step(types.AdamParams(learning_rate=1e-4))
+    fwdbwd_result = fwdbwd_future.result()
+    optim_result  = optim_future.result()
+    # compute loss per token ...
+```
+
+Sampling from the Model
+-----------------------
+
+After training, save the weights and create a sampling client using `save_weights_and_get_sampling_client(name)`https://tinker-docs.thinkingmachines.ai/training-sampling#:~:text=,model. Then sample sequences with the sampling client:
+
+```python
+prompt  = types.ModelInput.from_ints(tokenizer.encode("English: coffee break\nPig Latin:"))
+params  = types.SamplingParams(max_tokens=20, temperature=0.0, stop=["\n"])
+future  = sampling_client.sample(prompt=prompt, sampling_params=params, num_samples=8)
+result  = future.result()
+```
+
+Because sampling is nondeterministic—even with temperature=0.0 due to batching—each run may produce different outputshttps://tinker-docs.thinkingmachines.ai/training-sampling#:~:text=Since%20sampling%20is%20nondeterministic%20,should%20see%20something%20like%20this.
+
+Computing Log Probabilities and Top‑k Logprobs
+----------------------------------------------
+
+The sampling client can compute log probabilities for a given sequence using the prefill step. Call `sample(..., include_prompt_logprobs=True)` or use the helper `compute_logprobs(prompt)` to retrieve log probabilities of the prompt tokenshttps://tinker-docs.thinkingmachines.ai/training-sampling#:~:text=Computing%20logprobs%20for%20a%20sequence. For distillation tasks, request top‑k log probabilities by setting `topk_prompt_logprobs=k`, which returns a list of `(token_id, logprob)` pairs for the top‑k tokens at each positionhttps://tinker-docs.thinkingmachines.ai/training-sampling#:~:text=Top.
+
+Loss Functions
+--------------
+
+For most tasks you can specify a built‑in loss function when calling `forward_backward`. Supported identifiers include:
+
+- `cross_entropy` – standard supervised learning objective that maximizes the log‑probability of the target tokenshttps://tinker-docs.thinkingmachines.ai/losses#:~:text=Currently%2C%20the%20Tinker%20API%20supports,sequence%20of%20tokens%20as%20x.
+- `importance_sampling` – a policy‑gradient objective that corrects for mismatch between the learner policy p_θ and the sampling policy q using importance samplinghttps://tinker-docs.thinkingmachines.ai/losses#:~:text=Policy%20gradient%3A%20.
+- `ppo` – Proximal Policy Optimization, which clips the probability ratio to prevent large policy updates and uses both clipped and unclipped objectiveshttps://tinker-docs.thinkingmachines.ai/losses#:~:text=PPO%20%28Schulman%20et%20al,on%20the%20same%20rollout%20distribution.
+
+Each loss operates on sequences at the token level and requires specific input tensors. For example, `cross_entropy` expects `target_tokens` and `weights`, and produces `logprobs` and a scalar `loss`https://tinker-docs.thinkingmachines.ai/losses#:~:text=,entropy%20losses. For `importance_sampling`, inputs include `target_tokens`, `logprobs`, and `advantages`; outputs include `logprobs` and the summed losshttps://tinker-docs.thinkingmachines.ai/losses#:~:text=,policy%20gradient%20losses%20L%20IS.
+
+Flexible Loss Functions (`forward_backward_custom`)
+---------------------------------------------------
+
+When the built‑in losses are insufficient, define your own differentiable loss function and call `forward_backward_custom` or its async varianthttps://tinker-docs.thinkingmachines.ai/losses#:~:text=sequence%20length%20unlike%20some%20other,2. A custom loss function takes a list of `Datum` objects and a list of log probability tensors and returns `(loss, metrics)`https://tinker-docs.thinkingmachines.ai/losses#:~:text=Flexible%20loss%20functions%3A%20. You can operate on multiple sequences; for example, computing variance across log probabilitieshttps://tinker-docs.thinkingmachines.ai/losses#:~:text=You%20can%20also%20define%20loss,can%20be%20implemented%20as or implementing Bradley–Terry or Direct Preference Optimization losseshttps://tinker-docs.thinkingmachines.ai/losses#:~:text=A%20more%20practical%20use%20case,loss%20involving%20pairs%20of%20sequences. Under the hood, Tinker decomposes the computation into a forward pass and a weighted cross‑entropy loss to obtain the correct gradienthttps://tinker-docs.thinkingmachines.ai/losses#:~:text=How%20. Using `forward_backward_custom` requires 1.5× more floating‑point operations and up to 3× more wall time than a single `forward_backward` callhttps://tinker-docs.thinkingmachines.ai/losses#:~:text=Since%20,operations%20are%20scheduled.
+
+Saving and Loading Checkpoints
+------------------------------
+
+During training you often need to save checkpoints. The `TrainingClient` provides:
+
+1. `save_weights_for_sampler(name)` – saves model weights for samplinghttps://tinker-docs.thinkingmachines.ai/save-load#:~:text=Saving%20and%20loading%20weights%20and,optimizer%20state.
+2. `save_state(name)` – saves model weights and optimizer statehttps://tinker-docs.thinkingmachines.ai/save-load#:~:text=Saving%20and%20loading%20weights%20and,optimizer%20state.
+3. `load_state(path)` – loads weights and optimizer state to resume traininghttps://tinker-docs.thinkingmachines.ai/save-load#:~:text=1.%20,resume%20training%20from%20this%20checkpoint.
+
+Saving only weights is faster and uses less space than saving full statehttps://tinker-docs.thinkingmachines.ai/save-load#:~:text=Note%20that%20,2. The `name` parameter identifies the checkpoint within a training run; the return value includes a `path` such as `tinker://<model_id>/<name>`https://tinker-docs.thinkingmachines.ai/save-load#:~:text=Both%20%60save_,etc. To create a sampling client directly, call `save_weights_and_get_sampling_client(name)`https://tinker-docs.thinkingmachines.ai/save-load#:~:text=Example%3A%20Saving%20for%20sampling.
+
+To resume training with full optimizer state, save a state, then call `load_state(path)`https://tinker-docs.thinkingmachines.ai/save-load#:~:text=Example%3A%20Saving%20to%20resume%20training. Use full state checkpoints when adjusting hyperparameters mid‑run, recovering from failures, or performing multi‑step training pipelineshttps://tinker-docs.thinkingmachines.ai/save-load#:~:text=When%20to%20use%20,load_state.
+
+Downloading Checkpoints
+-----------------------
+
+To download a checkpoint archive, use the `RestClient`:
+
+```python
+import tinker
+sc     = tinker.ServiceClient()
+rc     = sc.create_rest_client()
+future = rc.get_checkpoint_archive_url_from_tinker_path("tinker://<unique_id>/sampler_weights/final")
+checkpoint_archive_url_response = future.result()
+# checkpoint_archive_url_response.url can be downloaded until expires
+import urllib.request
+urllib.request.urlretrieve(checkpoint_archive_url_response.url, "archive.tar")
+```
+
+Replace `<unique_id>` with your training run ID; the resulting `archive.tar` contains the LoRA adapter weights and configurationhttps://tinker-docs.thinkingmachines.ai/download-weights#:~:text=Downloading%20Weights.
+
+Publishing and Unpublishing Checkpoints
+---------------------------------------
+
+To share a checkpoint with others, publish it using the CLI:
+
+```
+tinker checkpoint publish $TINKER_CHECKPOINT_PATH
+```
+
+where `$TINKER_CHECKPOINT_PATH` is a Tinker path like `tinker://.../weights/checkpoint_id_to_publish`https://tinker-docs.thinkingmachines.ai/publish-weights#:~:text=tinker%20checkpoint%20publish%20%24TINKER_CHECKPOINT_PATH. Verify publication status via `tinker checkpoint info`https://tinker-docs.thinkingmachines.ai/publish-weights#:~:text=You%20may%20confirm%20your%20checkpoint,property. To unpublish, run:
+
+```
+tinker checkpoint unpublish $TINKER_CHECKPOINT_PATH
+```
+
+To load public weights, create a new `TrainingClient` with the base model and rank, then call `load_state(path)`https://tinker-docs.thinkingmachines.ai/publish-weights#:~:text=Loading%20public%20weights%20is%20slightly,Rather%20than%20using; you cannot load public checkpoints directly because training run metadata is privatehttps://tinker-docs.thinkingmachines.ai/publish-weights#:~:text=Loading%20public%20weights%20is%20slightly,Rather%20than%20using.
+
+Async vs Sync API and Futures
+-----------------------------
+
+Every method in Tinker has both synchronous and asynchronous variants. Async methods end with `_async` (e.g., `forward_async`) and require an `asyncio` event loophttps://tinker-docs.thinkingmachines.ai/async#:~:text=Sync%20and%20Async%20APIs. Use asynchronous methods for high‑performance workflows where you need concurrency; they allow multiple network calls to overlaphttps://tinker-docs.thinkingmachines.ai/async#:~:text=%2A%20Async%3A%20Best%20for%20high,but%20blocks%20on%20each%20operation. Synchronous methods are simpler and easier for scripting but block on each operationhttps://tinker-docs.thinkingmachines.ai/async#:~:text=%2A%20Async%3A%20Best%20for%20high,but%20blocks%20on%20each%20operation.
+
+Most Tinker operations return a `Future` object immediately and execute on the server. To retrieve the result in sync code, call `future.result()`https://tinker-docs.thinkingmachines.ai/async#:~:text=Most%20Tinker%20API%20methods%20are,result%2C%20you%20must%20explicitly%20wait. In async code, await the future twice: first to queue the request, and second to obtain the resulthttps://tinker-docs.thinkingmachines.ai/async#:~:text=Async%20Python%20,await. For best performance, overlap requests by submitting the next operation before waiting for the previous one; this is important because Tinker runs on discrete clock cycles (~10 s)https://tinker-docs.thinkingmachines.ai/async#:~:text=Performance%20tips%3A%20overlap%20requests. For example, submit `forward_backward_async` and `optim_step_async`, then await both results laterhttps://tinker-docs.thinkingmachines.ai/async#:~:text=,forward_backward_async%28batch%2C%20loss_fn.
+
+Model Lineup
+------------
+
+Tinker offers a variety of base and post‑trained models. Generally choose Mixture of Experts (MoE) models because they are more cost‑effective than dense modelshttps://tinker-docs.thinkingmachines.ai/model-lineup#:~:text=,thought. Base models are suitable for post‑training research; to specialize a model for a specific task, start from an existing post‑trained model and fine‑tune it on your datahttps://tinker-docs.thinkingmachines.ai/model-lineup#:~:text=,your%20own%20data%20or%20environment. If latency matters, use "⚡ Instruction" models that output tokens without chain‑of‑thought; for intelligence and robustness, use "Hybrid" or "Reasoning" models that support chain‑of‑thoughthttps://tinker-docs.thinkingmachines.ai/model-lineup#:~:text=,thought.
+
+The documentation lists models with their training type, architecture, and sizehttps://tinker-docs.thinkingmachines.ai/model-lineup#:~:text=Full%20Listing. Training types include Base (foundation models), ⚡ Instruction (fine‑tuned for chat, optimized for fast inference), Reasoning (models that always use chain‑of‑thought), and Hybrid (models that can operate in both thinking and non‑thinking modes by adjusting rendering)https://tinker-docs.thinkingmachines.ai/model-lineup#:~:text=,special%20renderer%20or%20argument%20that. Architectures are Dense or MoE, and model sizes range from Compact (1–4B parameters) to Large (70B+)https://tinker-docs.thinkingmachines.ai/model-lineup#:~:text=Architecture. MoE models are more cost‑efficient because only a subset of parameters are active during inferencehttps://tinker-docs.thinkingmachines.ai/model-lineup#:~:text=Note%20that%20the%20MoE%20models,the%20total%20number%20of%20parameters.

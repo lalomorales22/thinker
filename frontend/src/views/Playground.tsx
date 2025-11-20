@@ -1,5 +1,5 @@
-import { Send, RotateCcw, Copy, ThumbsUp, ThumbsDown, Zap, Settings, MessageSquare } from 'lucide-react'
-import { useState } from 'react'
+import { Send, RotateCcw, Copy, ThumbsUp, ThumbsDown, Zap, Settings, MessageSquare, Loader2 } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
 import Editor from '@monaco-editor/react'
 
 interface Message {
@@ -17,27 +17,108 @@ interface Message {
 export default function Playground() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
-  const [selectedModel, setSelectedModel] = useState('code-review-agent-v1')
+  const [selectedModel, setSelectedModel] = useState('')
+  const [availableModels, setAvailableModels] = useState<string[]>([])
   const [temperature, setTemperature] = useState(0.7)
   const [maxTokens, setMaxTokens] = useState(512)
   const [showSettings, setShowSettings] = useState(false)
   const [codeInput, setCodeInput] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  const handleSend = () => {
-    if (!input.trim() && !codeInput.trim()) return
+  // Fetch available models
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/models/base/available')
+        if (response.ok) {
+          const data = await response.json()
+          setAvailableModels(data.models)
+          if (data.models.length > 0) {
+            setSelectedModel(data.models[0])
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch models:', error)
+        // Fallback
+        setAvailableModels(['meta-llama/Llama-3.2-1B'])
+      }
+    }
+    fetchModels()
+  }, [])
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const handleSend = async () => {
+    if ((!input.trim() && !codeInput.trim()) || isLoading) return
+
+    const userContent = input && codeInput
+      ? `${input}\n\nCode Context:\n\`\`\`\n${codeInput}\n\`\`\``
+      : input
+        ? input
+        : `Review this code:\n\n\`\`\`\n${codeInput}\n\`\`\``
 
     const newMessage: Message = {
       id: `msg_${Date.now()}`,
       role: 'user',
-      content: input || `Review this code:\n\n${codeInput}`,
+      content: userContent,
       timestamp: new Date().toLocaleTimeString()
     }
 
-    setMessages([...messages, newMessage])
+    setMessages(prev => [...prev, newMessage])
     setInput('')
+    setIsLoading(true)
 
-    // TODO: Connect to API endpoint
-    // POST /api/chat/completions with message and selected model
+    const startTime = Date.now()
+
+    try {
+      const response = await fetch('http://localhost:8000/api/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model_name: selectedModel,
+          messages: [{ role: 'user', content: userContent }],
+          temperature: temperature,
+          max_tokens: maxTokens
+        })
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        const endTime = Date.now()
+
+        const assistantMessage: Message = {
+          id: `msg_${Date.now()}_a`,
+          role: 'assistant',
+          content: data.response,
+          timestamp: new Date().toLocaleTimeString(),
+          metadata: {
+            model: data.model,
+            tokens: data.tokens_used,
+            latency: (endTime - startTime) / 1000
+          }
+        }
+        setMessages(prev => [...prev, assistantMessage])
+      } else {
+        throw new Error('Failed to get response')
+      }
+    } catch (error) {
+      console.error('Chat error:', error)
+      const errorMessage: Message = {
+        id: `msg_${Date.now()}_err`,
+        role: 'assistant',
+        content: "Sorry, I encountered an error processing your request. Please ensure the backend is running and the API key is set.",
+        timestamp: new Date().toLocaleTimeString()
+      }
+      setMessages(prev => [...prev, errorMessage])
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -52,7 +133,7 @@ export default function Playground() {
           <div className="flex items-center gap-2">
             <select
               className="input-tactical text-xs px-3 py-1.5 font-mono"
-              value="python"
+              defaultValue="python"
             >
               <option value="python">Python</option>
               <option value="javascript">JavaScript</option>
@@ -60,7 +141,7 @@ export default function Playground() {
               <option value="go">Go</option>
               <option value="rust">Rust</option>
             </select>
-            <button className="btn btn-ghost btn-xs p-1.5">
+            <button className="btn btn-ghost btn-xs p-1.5" onClick={() => setCodeInput('')}>
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -87,8 +168,9 @@ export default function Playground() {
           <button
             className="btn btn-primary w-full flex items-center justify-center gap-2"
             onClick={handleSend}
+            disabled={isLoading}
           >
-            <Zap className="w-4 h-4" />
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
             Review Code
           </button>
         </div>
@@ -103,21 +185,21 @@ export default function Playground() {
           </div>
           <div className="flex items-center gap-2">
             <select
-              className="input-tactical text-xs px-3 py-1.5 font-mono"
+              className="input-tactical text-xs px-3 py-1.5 font-mono max-w-[200px]"
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
             >
-              <option value="code-review-agent-v1">code-review-agent-v1</option>
-              <option value="self-review-agent">self-review-agent</option>
-              <option value="Qwen3-30B-A3B-Base">Qwen3-30B-A3B-Base</option>
+              {availableModels.map(model => (
+                <option key={model} value={model}>{model}</option>
+              ))}
             </select>
             <button
-              className="btn btn-ghost btn-xs p-1.5"
+              className={`btn btn-ghost btn-xs p-1.5 ${showSettings ? 'text-brain-blue-400' : ''}`}
               onClick={() => setShowSettings(!showSettings)}
             >
               <Settings className="w-3.5 h-3.5" />
             </button>
-            <button className="btn btn-ghost btn-xs p-1.5">
+            <button className="btn btn-ghost btn-xs p-1.5" onClick={() => setMessages([])}>
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -125,9 +207,12 @@ export default function Playground() {
 
         {/* Settings Panel */}
         {showSettings && (
-          <div className="border-b border-obsidian-border p-4 bg-obsidian-surface space-y-3">
+          <div className="border-b border-obsidian-border p-4 bg-obsidian-surface space-y-3 animate-in slide-in-from-top-2">
             <div>
-              <label className="block text-xs font-medium mb-1">Temperature: {temperature}</label>
+              <div className="flex justify-between mb-1">
+                <label className="block text-xs font-medium">Temperature</label>
+                <span className="text-xs font-mono text-dark-text-secondary">{temperature}</span>
+              </div>
               <input
                 type="range"
                 min="0"
@@ -135,19 +220,22 @@ export default function Playground() {
                 step="0.1"
                 value={temperature}
                 onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                className="w-full"
+                className="w-full accent-brain-blue-500"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium mb-1">Max Tokens: {maxTokens}</label>
+              <div className="flex justify-between mb-1">
+                <label className="block text-xs font-medium">Max Tokens</label>
+                <span className="text-xs font-mono text-dark-text-secondary">{maxTokens}</span>
+              </div>
               <input
                 type="range"
                 min="64"
-                max="2048"
+                max="4096"
                 step="64"
                 value={maxTokens}
                 onChange={(e) => setMaxTokens(parseInt(e.target.value))}
-                className="w-full"
+                className="w-full accent-brain-blue-500"
               />
             </div>
           </div>
@@ -160,7 +248,7 @@ export default function Playground() {
               <MessageSquare className="w-16 h-16 text-tactical-500 mb-4 opacity-50" />
               <h3 className="text-lg font-semibold text-dark-text mb-2">No messages yet</h3>
               <p className="text-sm text-dark-text-secondary max-w-md">
-                Start a conversation by entering code or sending a message. Your chat history will appear here.
+                Start a conversation by entering code or sending a message. Select a model from the dropdown to begin.
               </p>
             </div>
           ) : (
@@ -170,11 +258,10 @@ export default function Playground() {
                 className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-[80%] rounded-ide p-3 ${
-                    message.role === 'user'
-                      ? 'bg-brain-blue-500/20 border border-brain-blue-500/50'
-                      : 'bg-dark-surface border border-dark-border'
-                  }`}
+                  className={`max-w-[85%] rounded-ide p-3 ${message.role === 'user'
+                    ? 'bg-brain-blue-500/20 border border-brain-blue-500/50'
+                    : 'bg-dark-surface border border-dark-border'
+                    }`}
                 >
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-medium text-dark-text-secondary">
@@ -183,26 +270,26 @@ export default function Playground() {
                     <span className="text-xs text-dark-text-secondary">{message.timestamp}</span>
                   </div>
 
-                  <div className="text-sm whitespace-pre-wrap prose prose-invert max-w-none">
+                  <div className="text-sm whitespace-pre-wrap prose prose-invert max-w-none font-sans">
                     {message.content}
                   </div>
 
                   {message.metadata && (
-                    <div className="flex items-center gap-3 mt-3 pt-3 border-t border-dark-border text-xs text-dark-text-secondary">
+                    <div className="flex items-center gap-3 mt-3 pt-3 border-t border-dark-border text-xs text-dark-text-secondary font-mono">
                       <span>{message.metadata.tokens} tokens</span>
-                      <span>{message.metadata.latency}s</span>
+                      <span>{message.metadata.latency?.toFixed(2)}s</span>
                     </div>
                   )}
 
                   {message.role === 'assistant' && (
                     <div className="flex items-center gap-2 mt-3 pt-3 border-t border-dark-border">
-                      <button className="btn btn-ghost btn-sm p-1.5" title="Copy">
+                      <button className="btn btn-ghost btn-sm p-1.5 hover:text-white" title="Copy">
                         <Copy className="w-3.5 h-3.5" />
                       </button>
-                      <button className="btn btn-ghost btn-sm p-1.5 text-green-400" title="Good response">
+                      <button className="btn btn-ghost btn-sm p-1.5 text-green-400/70 hover:text-green-400" title="Good response">
                         <ThumbsUp className="w-3.5 h-3.5" />
                       </button>
-                      <button className="btn btn-ghost btn-sm p-1.5 text-red-400" title="Bad response">
+                      <button className="btn btn-ghost btn-sm p-1.5 text-red-400/70 hover:text-red-400" title="Bad response">
                         <ThumbsDown className="w-3.5 h-3.5" />
                       </button>
                     </div>
@@ -211,13 +298,14 @@ export default function Playground() {
               </div>
             ))
           )}
+          <div ref={messagesEndRef} />
         </div>
 
         {/* Input */}
-        <div className="border-t border-dark-border p-3">
+        <div className="border-t border-dark-border p-3 bg-dark-bg">
           <div className="flex items-end gap-2">
             <textarea
-              className="input-field flex-1 resize-none"
+              className="input-field flex-1 resize-none min-h-[80px]"
               rows={3}
               placeholder="Ask a question or request a code review..."
               value={input}
@@ -228,16 +316,19 @@ export default function Playground() {
                   handleSend()
                 }
               }}
+              disabled={isLoading}
             />
             <button
-              className="btn btn-primary p-2.5"
+              className="btn btn-primary p-2.5 h-[42px] w-[42px] flex items-center justify-center"
               onClick={handleSend}
+              disabled={isLoading || (!input.trim() && !codeInput.trim())}
             >
-              <Send className="w-4 h-4" />
+              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
-          <p className="text-xs text-dark-text-secondary mt-2">
-            Press Enter to send, Shift+Enter for new line
+          <p className="text-xs text-dark-text-secondary mt-2 flex justify-between">
+            <span>Press Enter to send, Shift+Enter for new line</span>
+            {isLoading && <span className="text-brain-blue-400 animate-pulse">Thinking...</span>}
           </p>
         </div>
       </div>

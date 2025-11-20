@@ -27,6 +27,12 @@ wheels/
 venv/
 ENV/
 env/
+vewnv/
+backend/vewnv/
+
+# Data storage
+backend/data_storage/
+*.jsonl
 
 # Environment variables
 .env

@@ -41,15 +41,46 @@ async def get_model(model_name: str):
 @router.get("/base/available")
 async def list_base_models():
     """List available base models from Tinker"""
-    # This will use tinker.ServiceClient() to discover models
-    return {
-        "models": [
-            "meta-llama/Llama-3.2-1B",
-            "meta-llama/Llama-3.2-3B",
-            "Qwen/Qwen2.5-7B-Instruct",
-            "Qwen/Qwen3-30B-A3B-Base"
-        ]
-    }
+    try:
+        import tinker
+        # Check for API key
+        import os
+        if not os.getenv("TINKER_API_KEY"):
+            raise ValueError("TINKER_API_KEY not set")
+            
+        service_client = tinker.ServiceClient()
+        # Note: get_server_capabilities might be async or sync depending on SDK version, 
+        # but docs say "inspect available models using service_client.get_server_capabilities().supported_models"
+        # We'll assume sync for now as per docs snippet
+        capabilities = service_client.get_server_capabilities()
+        models = capabilities.supported_models
+        return {"models": models}
+    except Exception as e:
+        print(f"Failed to fetch Tinker models: {e}")
+        # Fallback to hardcoded list
+        return {
+            "models": [
+                "Qwen/Qwen3-235B-A22B-Instruct-2507",
+                "Qwen/Qwen3-30B-A3B-Instruct-2507",
+                "Qwen/Qwen3-30B-A3B",
+                "Qwen/Qwen3-30B-A3B-Base",
+                "Qwen/Qwen3-32B",
+                "Qwen/Qwen3-8B",
+                "Qwen/Qwen3-8B-Base",
+                "Qwen/Qwen3-4B-Instruct-2507",
+                "openai/gpt-oss-120b",
+                "openai/gpt-oss-20b",
+                "deepseek-ai/DeepSeek-V3.1",
+                "deepseek-ai/DeepSeek-V3.1-Base",
+                "meta-llama/Llama-3.1-70B",
+                "meta-llama/Llama-3.3-70B-Instruct",
+                "meta-llama/Llama-3.1-8B",
+                "meta-llama/Llama-3.1-8B-Instruct",
+                "meta-llama/Llama-3.2-3B",
+                "meta-llama/Llama-3.2-1B"
+            ],
+            "source": "fallback (Tinker API unavailable)"
+        }
 
 @router.delete("/{model_name}")
 async def delete_model(model_name: str):

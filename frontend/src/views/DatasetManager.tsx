@@ -1,5 +1,5 @@
 import { Upload, Trash2, Eye, Database, Download } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 interface Dataset {
   id: string
@@ -18,9 +18,80 @@ interface Dataset {
 }
 
 export default function DatasetManager() {
-  const [datasets] = useState<Dataset[]>([])
+  const [datasets, setDatasets] = useState<Dataset[]>([])
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null)
   const [showUploadModal, setShowUploadModal] = useState(false)
+
+  // Upload Form State
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [datasetName, setDatasetName] = useState('')
+  const [datasetType, setDatasetType] = useState('code_review')
+  const [fileFormat, setFileFormat] = useState('JSONL')
+  const [trainSplit, setTrainSplit] = useState('80')
+  const [valSplit, setValSplit] = useState('15')
+  const [testSplit, setTestSplit] = useState('5')
+
+  // Fetch datasets
+  useEffect(() => {
+    const fetchDatasets = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/datasets/')
+        if (response.ok) {
+          const data = await response.json()
+          setDatasets(data.datasets)
+        }
+      } catch (error) {
+        console.error('Failed to fetch datasets:', error)
+      }
+    }
+
+    fetchDatasets()
+    // Poll for updates
+    const interval = setInterval(fetchDatasets, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setUploadFile(e.target.files[0])
+      // Auto-detect format from extension
+      const ext = e.target.files[0].name.split('.').pop()?.toUpperCase()
+      if (['JSONL', 'JSON', 'CSV'].includes(ext || '')) {
+        setFileFormat(ext as any)
+      }
+    }
+  }
+
+  const handleUpload = async () => {
+    if (!uploadFile || !datasetName) return
+
+    const formData = new FormData()
+    formData.append('file', uploadFile)
+    formData.append('name', datasetName)
+    formData.append('type', datasetType)
+    formData.append('format', fileFormat)
+    formData.append('train_split', trainSplit)
+    formData.append('val_split', valSplit)
+    formData.append('test_split', testSplit)
+
+    try {
+      const response = await fetch('http://localhost:8000/api/datasets/upload', {
+        method: 'POST',
+        body: formData
+      })
+
+      if (response.ok) {
+        setShowUploadModal(false)
+        setUploadFile(null)
+        setDatasetName('')
+        // Refresh list will happen via poll or we can trigger it manually
+      } else {
+        console.error('Upload failed')
+      }
+    } catch (error) {
+      console.error('Error uploading:', error)
+    }
+  }
 
   const getTypeColor = (type: string) => {
     switch (type) {
@@ -65,11 +136,10 @@ export default function DatasetManager() {
               {datasets.map((dataset) => (
                 <div
                   key={dataset.id}
-                  className={`bg-dark-surface border rounded-ide p-4 cursor-pointer transition-all ${
-                    selectedDataset?.id === dataset.id
-                      ? 'border-brain-blue-500 ring-1 ring-brain-blue-500/50'
-                      : 'border-dark-border hover:border-brain-blue-500/50'
-                  }`}
+                  className={`bg-dark-surface border rounded-ide p-4 cursor-pointer transition-all ${selectedDataset?.id === dataset.id
+                    ? 'border-brain-blue-500 ring-1 ring-brain-blue-500/50'
+                    : 'border-dark-border hover:border-brain-blue-500/50'
+                    }`}
                   onClick={() => setSelectedDataset(dataset)}
                 >
                   <div className="flex items-start justify-between mb-3">
@@ -260,6 +330,8 @@ export default function DatasetManager() {
                   type="text"
                   className="input-field"
                   placeholder="e.g., code-reviews-javascript"
+                  value={datasetName}
+                  onChange={(e) => setDatasetName(e.target.value)}
                 />
               </div>
 
@@ -267,7 +339,11 @@ export default function DatasetManager() {
                 <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
                   Dataset Type
                 </label>
-                <select className="input-field font-mono">
+                <select
+                  className="input-field font-mono"
+                  value={datasetType}
+                  onChange={(e) => setDatasetType(e.target.value)}
+                >
                   <option value="code_review">Code Review</option>
                   <option value="preference">Preference Pairs</option>
                   <option value="rl_reward">RL Reward</option>
@@ -284,7 +360,8 @@ export default function DatasetManager() {
                   {['JSONL', 'JSON', 'CSV'].map((fmt) => (
                     <button
                       key={fmt}
-                      className="btn btn-ghost border border-obsidian-border hover:border-tactical-primary text-tactical-text-secondary hover:text-tactical-primary"
+                      className={`btn btn-ghost border ${fileFormat === fmt ? 'bg-tactical-primary/20 border-tactical-primary text-tactical-primary' : 'border-obsidian-border hover:border-tactical-primary text-tactical-text-secondary hover:text-tactical-primary'}`}
+                      onClick={() => setFileFormat(fmt)}
                     >
                       {fmt}
                     </button>
@@ -296,13 +373,18 @@ export default function DatasetManager() {
                 <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
                   Upload File
                 </label>
-                <div className="border-2 border-dashed border-obsidian-border rounded-tactical p-8 text-center hover:border-tactical-primary/50 transition-all cursor-pointer bg-obsidian-surface/30">
+                <div className="relative border-2 border-dashed border-obsidian-border rounded-tactical p-8 text-center hover:border-tactical-primary/50 transition-all cursor-pointer bg-obsidian-surface/30">
+                  <input
+                    type="file"
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    onChange={handleFileSelect}
+                  />
                   <Upload className="w-10 h-10 mx-auto mb-3 text-tactical-text-muted" />
                   <p className="text-sm text-tactical-text-secondary mb-1">
-                    Drag and drop your file here, or click to browse
+                    {uploadFile ? uploadFile.name : 'Drag and drop your file here, or click to browse'}
                   </p>
                   <p className="text-xs text-tactical-text-muted font-mono">
-                    Supports JSONL, JSON, CSV (max 500MB)
+                    {uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : 'Supports JSONL, JSON, CSV (max 500MB)'}
                   </p>
                 </div>
               </div>
@@ -314,15 +396,33 @@ export default function DatasetManager() {
                 <div className="grid grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs text-tactical-text-muted mb-1">Train %</label>
-                    <input type="number" className="input-field font-mono" placeholder="80" />
+                    <input
+                      type="number"
+                      className="input-field font-mono"
+                      placeholder="80"
+                      value={trainSplit}
+                      onChange={(e) => setTrainSplit(e.target.value)}
+                    />
                   </div>
                   <div>
                     <label className="block text-xs text-tactical-text-muted mb-1">Val %</label>
-                    <input type="number" className="input-field font-mono" placeholder="15" />
+                    <input
+                      type="number"
+                      className="input-field font-mono"
+                      placeholder="15"
+                      value={valSplit}
+                      onChange={(e) => setValSplit(e.target.value)}
+                    />
                   </div>
                   <div>
                     <label className="block text-xs text-tactical-text-muted mb-1">Test %</label>
-                    <input type="number" className="input-field font-mono" placeholder="5" />
+                    <input
+                      type="number"
+                      className="input-field font-mono"
+                      placeholder="5"
+                      value={testSplit}
+                      onChange={(e) => setTestSplit(e.target.value)}
+                    />
                   </div>
                 </div>
               </div>
@@ -335,7 +435,11 @@ export default function DatasetManager() {
               >
                 Cancel
               </button>
-              <button className="btn btn-primary flex items-center gap-2">
+              <button
+                className="btn btn-primary flex items-center gap-2"
+                onClick={handleUpload}
+                disabled={!uploadFile || !datasetName}
+              >
                 <Upload className="w-4 h-4" />
                 Upload Dataset
               </button>

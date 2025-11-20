@@ -16,6 +16,8 @@ class ChatRequest(BaseModel):
     messages: List[Message]
     temperature: float = 0.7
     max_tokens: int = 2048
+    
+    model_config = {'protected_namespaces': ()}
 
 class ChatResponse(BaseModel):
     response: str
@@ -26,13 +28,45 @@ class ChatResponse(BaseModel):
 async def chat_completion(request: ChatRequest):
     """
     Send a chat request to a trained model
-    This will use the Tinker sampling client
     """
-    # Placeholder response - will be replaced with actual Tinker sampling
+    # Initialize agent (in a real app, this might be a singleton or cached)
+    agent = CodeReviewAgent(base_model=request.model_name)
+    
+    # Reuse the agent's sampling logic (we might want to expose a cleaner chat method on the agent later)
+    # For now, we'll construct a prompt from messages
+    prompt_text = "\n".join([f"{m.role}: {m.content}" for m in request.messages])
+    
+    # We'll use the review_code method's internal logic but adapted
+    # Since review_code is specific, let's just use the agent's client if available
+    client = agent._get_sampling_client()
+    
+    if client:
+        try:
+            from tinker import types
+            tokenizer = client.tokenizer
+            prompt = types.ModelInput.from_ints(tokenizer.encode(prompt_text))
+            params = types.SamplingParams(max_tokens=request.max_tokens, temperature=request.temperature)
+            
+            future = client.sample_async(prompt=prompt, sampling_params=params, num_samples=1)
+            await future
+            result = await future
+            
+            output_tokens = result.samples[0].token_ids
+            response_text = tokenizer.decode(output_tokens)
+            
+            return ChatResponse(
+                response=response_text,
+                model=request.model_name,
+                tokens_used=len(output_tokens)
+            )
+        except Exception as e:
+            print(f"Chat completion failed: {e}")
+            
+    # Fallback
     return ChatResponse(
-        response="This is a placeholder response. Once integrated with Tinker, this will use the actual trained model.",
+        response="Tinker SDK unavailable. This is a placeholder response.",
         model=request.model_name,
-        tokens_used=42
+        tokens_used=0
     )
 
 @router.post("/review-code")
@@ -40,24 +74,11 @@ async def review_code(code: str, language: str = "python", model_name: str = "co
     """
     Specialized endpoint for code review
     """
-    # This will use the CodeReviewAgent
+    agent = CodeReviewAgent(base_model=model_name)
+    result = await agent.review_code(code, language)
+    
     return {
-        "review": {
-            "summary": "Code review placeholder",
-            "issues": [
-                {
-                    "line": 10,
-                    "severity": "warning",
-                    "message": "Consider adding type hints",
-                    "suggestion": "def function_name(param: str) -> int:"
-                }
-            ],
-            "score": 85,
-            "suggestions": [
-                "Add docstrings to functions",
-                "Consider error handling for edge cases"
-            ]
-        },
+        "review": result["review"],
         "model": model_name
     }
 

@@ -1,10 +1,10 @@
-import { Play, Pause, Trash2, Plus, Clock, Zap, TrendingUp, Server, Cpu, Activity, Target, Flame, Database as DatabaseIcon, Brain, GitBranch } from 'lucide-react'
-import { useState } from 'react'
+import { Play, Pause, Trash2, Plus, Clock, Zap, TrendingUp, Server, Cpu, Activity, Target, Database as DatabaseIcon, Brain, GitBranch } from 'lucide-react'
+import { useState, useEffect } from 'react'
 
 interface TrainingJob {
   id: string
   name: string
-  status: 'running' | 'completed' | 'failed' | 'queued'
+  status: 'running' | 'completed' | 'failed' | 'queued' | 'cancelled'
   baseModel: string
   trainingType: 'SL' | 'RL' | 'RLHF' | 'DPO'
   progress: number
@@ -17,8 +17,77 @@ interface TrainingJob {
 }
 
 export default function TrainingDashboard() {
-  const [jobs] = useState<TrainingJob[]>([])
+  const [jobs, setJobs] = useState<TrainingJob[]>([])
   const [showNewJobModal, setShowNewJobModal] = useState(false)
+
+  // Form State
+  const [jobName, setJobName] = useState('')
+  const [baseModel, setBaseModel] = useState('Qwen/Qwen3-30B-A3B-Base')
+  const [trainingType, setTrainingType] = useState<'SL' | 'RL' | 'RLHF' | 'DPO'>('SL')
+  const [learningRate, setLearningRate] = useState('1e-4')
+  const [loraRank, setLoraRank] = useState('32')
+  const [batchSize, setBatchSize] = useState('4')
+  const [totalSteps, setTotalSteps] = useState('100')
+
+  // Fetch jobs on mount and poll
+  useEffect(() => {
+    const fetchJobs = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/training/jobs')
+        if (response.ok) {
+          const data = await response.json()
+          // Transform backend data to frontend interface if needed
+          // For now assuming direct mapping or close enough
+          const mappedJobs = data.jobs.map((j: any) => ({
+            id: j.job_id,
+            name: j.config.model_name, // or add name to backend config
+            status: j.status,
+            baseModel: j.config.model_name,
+            trainingType: j.config.training_type || 'SL',
+            progress: j.metrics.progress || 0,
+            currentStep: j.currentStep,
+            totalSteps: j.config.num_steps,
+            loss: j.metrics.loss,
+            timeElapsed: '0s', // calc from started_at
+            createdAt: j.started_at
+          }))
+          setJobs(mappedJobs)
+        }
+      } catch (error) {
+        console.error('Failed to fetch jobs:', error)
+      }
+    }
+
+    fetchJobs()
+    const interval = setInterval(fetchJobs, 2000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const handleDeployJob = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/training/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model_name: baseModel,
+          rank: parseInt(loraRank),
+          learning_rate: parseFloat(learningRate),
+          num_steps: parseInt(totalSteps),
+          batch_size: parseInt(batchSize),
+          training_type: trainingType
+        })
+      })
+
+      if (response.ok) {
+        setShowNewJobModal(false)
+        // Reset form?
+      } else {
+        console.error('Failed to deploy job')
+      }
+    } catch (error) {
+      console.error('Error deploying job:', error)
+    }
+  }
 
   const getStatusLED = (status: string) => {
     switch (status) {
@@ -266,7 +335,7 @@ export default function TrainingDashboard() {
                       <div className="mb-3">
                         <div className="flex items-center justify-between text-xs text-tactical-text-muted mb-1.5">
                           <span>Step {job.currentStep.toLocaleString()} / {job.totalSteps.toLocaleString()}</span>
-                          <span className="font-mono">{job.progress}%</span>
+                          <span className="font-mono">{job.progress.toFixed(1)}%</span>
                         </div>
                         <div className="progress-bar">
                           <div className="progress-fill" style={{ width: `${job.progress}%` }} />
@@ -327,6 +396,8 @@ export default function TrainingDashboard() {
                   type="text"
                   className="input-field"
                   placeholder="e.g., Code Review Agent v2"
+                  value={jobName}
+                  onChange={(e) => setJobName(e.target.value)}
                 />
               </div>
 
@@ -334,11 +405,15 @@ export default function TrainingDashboard() {
                 <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
                   Base Model
                 </label>
-                <select className="input-field">
-                  <option>Qwen/Qwen3-30B-A3B-Base</option>
-                  <option>Qwen/Qwen3-8B-Base</option>
-                  <option>Llama-3.1-8B</option>
-                  <option>Llama-3.2-1B</option>
+                <select
+                  className="input-field"
+                  value={baseModel}
+                  onChange={(e) => setBaseModel(e.target.value)}
+                >
+                  <option value="Qwen/Qwen3-30B-A3B-Base">Qwen/Qwen3-30B-A3B-Base</option>
+                  <option value="Qwen/Qwen3-8B-Base">Qwen/Qwen3-8B-Base</option>
+                  <option value="Llama-3.1-8B">Llama-3.1-8B</option>
+                  <option value="Llama-3.2-1B">Llama-3.2-1B</option>
                 </select>
               </div>
 
@@ -349,10 +424,12 @@ export default function TrainingDashboard() {
                 <div className="grid grid-cols-4 gap-2">
                   {['SL', 'RL', 'RLHF', 'DPO'].map((type) => {
                     const badge = getTypeBadge(type as any)
+                    const isSelected = trainingType === type
                     return (
                       <button
                         key={type}
-                        className={`btn btn-ghost border ${badge.border} ${badge.text} hover:${badge.bg}`}
+                        className={`btn btn-ghost border ${isSelected ? 'bg-tactical-primary/20 border-tactical-primary text-tactical-primary' : `${badge.border} ${badge.text} hover:${badge.bg}`}`}
+                        onClick={() => setTrainingType(type as any)}
                       >
                         {type}
                       </button>
@@ -366,13 +443,25 @@ export default function TrainingDashboard() {
                   <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
                     Learning Rate
                   </label>
-                  <input type="text" className="input-field font-mono" placeholder="5e-5" />
+                  <input
+                    type="text"
+                    className="input-field font-mono"
+                    placeholder="1e-4"
+                    value={learningRate}
+                    onChange={(e) => setLearningRate(e.target.value)}
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
                     LoRA Rank
                   </label>
-                  <input type="text" className="input-field font-mono" placeholder="32" />
+                  <input
+                    type="text"
+                    className="input-field font-mono"
+                    placeholder="32"
+                    value={loraRank}
+                    onChange={(e) => setLoraRank(e.target.value)}
+                  />
                 </div>
               </div>
 
@@ -381,13 +470,25 @@ export default function TrainingDashboard() {
                   <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
                     Batch Size
                   </label>
-                  <input type="text" className="input-field font-mono" placeholder="8" />
+                  <input
+                    type="text"
+                    className="input-field font-mono"
+                    placeholder="4"
+                    value={batchSize}
+                    onChange={(e) => setBatchSize(e.target.value)}
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
                     Total Steps
                   </label>
-                  <input type="text" className="input-field font-mono" placeholder="1000" />
+                  <input
+                    type="text"
+                    className="input-field font-mono"
+                    placeholder="100"
+                    value={totalSteps}
+                    onChange={(e) => setTotalSteps(e.target.value)}
+                  />
                 </div>
               </div>
             </div>
@@ -396,7 +497,10 @@ export default function TrainingDashboard() {
               <button className="btn btn-ghost" onClick={() => setShowNewJobModal(false)}>
                 Cancel
               </button>
-              <button className="btn btn-primary flex items-center gap-2">
+              <button
+                className="btn btn-primary flex items-center gap-2"
+                onClick={handleDeployJob}
+              >
                 <Play className="w-4 h-4" />
                 Deploy Job
               </button>
