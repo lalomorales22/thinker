@@ -53,10 +53,8 @@ async def list_base_models(x_api_key: Optional[str] = Header(None)):
         os.environ["TINKER_API_KEY"] = api_key
             
         service_client = tinker.ServiceClient()
-        # Note: get_server_capabilities might be async or sync depending on SDK version, 
-        # but docs say "inspect available models using service_client.get_server_capabilities().supported_models"
-        # We'll assume sync for now as per docs snippet
-        capabilities = service_client.get_server_capabilities()
+        # Use async version to avoid sync-from-async warnings
+        capabilities = await service_client.get_server_capabilities_async()
         models = capabilities.supported_models
         return {"models": models}
     except Exception as e:

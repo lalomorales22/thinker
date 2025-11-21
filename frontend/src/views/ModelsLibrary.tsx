@@ -54,18 +54,20 @@ export default function ModelsLibrary() {
         if (response.ok) {
           const data = await response.json()
           // Transform strings to Model objects
-          const fetchedModels: Model[] = data.models.map((name: string, index: number) => ({
-            id: `base-${index}`,
-            name: name.split('/').pop() || name,
-            baseModel: name,
-            type: 'base',
-            size: 'Unknown', // Could parse from name
-            checkpointPath: name,
-            trainingSteps: 0,
-            performance: {},
-            createdAt: new Date().toISOString().split('T')[0],
-            isFavorite: false
-          }))
+          const fetchedModels: Model[] = data.models
+            .filter((item: any) => typeof item === 'string') // Only process strings
+            .map((name: string, index: number) => ({
+              id: `base-${index}`,
+              name: name.split('/').pop() || name,
+              baseModel: name,
+              type: 'base',
+              size: 'Unknown', // Could parse from name
+              checkpointPath: name,
+              trainingSteps: 0,
+              performance: {},
+              createdAt: new Date().toISOString().split('T')[0],
+              isFavorite: false
+            }))
           setModels(fetchedModels)
         }
       } catch (error) {
