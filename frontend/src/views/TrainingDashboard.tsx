@@ -47,16 +47,17 @@ export default function TrainingDashboard() {
           // For now assuming direct mapping or close enough
           const mappedJobs = data.jobs.map((j: any) => ({
             id: j.job_id,
-            name: j.config.model_name, // or add name to backend config
+            name: j.config?.model_name || 'Unnamed Job',
             status: j.status,
-            baseModel: j.config.model_name,
-            trainingType: j.config.training_type || 'SL',
-            progress: j.metrics.progress || 0,
-            currentStep: j.currentStep,
-            totalSteps: j.config.num_steps,
-            loss: j.metrics.loss,
+            baseModel: j.config?.model_name || 'Unknown',
+            trainingType: j.config?.training_type || 'SL',
+            progress: j.metrics?.progress || 0,
+            currentStep: j.currentStep || 0,
+            totalSteps: j.config?.num_steps || 0,
+            loss: j.metrics?.loss,
+            reward: j.metrics?.reward,
             timeElapsed: '0s', // calc from started_at
-            createdAt: j.started_at
+            createdAt: j.started_at || new Date().toISOString()
           }))
           setJobs(mappedJobs)
         }
