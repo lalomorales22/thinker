@@ -33,6 +33,7 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
   const [suggestedConfig, setSuggestedConfig] = useState<any>(null);
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
   const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('llama3.2');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -54,6 +55,10 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
       const data = await response.json();
       setOllamaAvailable(data.available);
       setAvailableModels(data.models || []);
+      // Set first model as default if available
+      if (data.models && data.models.length > 0) {
+        setSelectedModel(data.models[0].name);
+      }
     } catch (error) {
       console.error('Failed to check Ollama availability:', error);
       setOllamaAvailable(false);
@@ -73,7 +78,8 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: [...messages, userMessage]
+          messages: [...messages, userMessage],
+          model: selectedModel
         })
       });
 
@@ -150,6 +156,21 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
                 {ollamaAvailable ? `Ollama (${availableModels.length} models)` : 'Ollama unavailable (using fallback)'}
               </span>
             </div>
+          )}
+          {ollamaAvailable && availableModels.length > 0 && (
+            <select
+              id="model-selector"
+              name="model"
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="px-3 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+            >
+              {availableModels.map((model) => (
+                <option key={model.name} value={model.name}>
+                  {model.name}
+                </option>
+              ))}
+            </select>
           )}
           <div className="flex items-center gap-2 text-xs text-gray-400">
             <BookOpen className="w-4 h-4" />
@@ -258,6 +279,8 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
       <div className="p-4 border-t border-gray-800">
         <div className="flex gap-2">
           <textarea
+            id="chat-input"
+            name="chatMessage"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyPress={handleKeyPress}

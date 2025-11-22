@@ -362,10 +362,12 @@ export default function DatasetManager() {
 
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
+                <label htmlFor="dataset-name" className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
                   Dataset Name
                 </label>
                 <input
+                  id="dataset-name"
+                  name="datasetName"
                   type="text"
                   className="input-field"
                   placeholder="e.g., code-reviews-javascript"
@@ -375,10 +377,12 @@ export default function DatasetManager() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
+                <label htmlFor="dataset-type" className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
                   Dataset Type
                 </label>
                 <select
+                  id="dataset-type"
+                  name="datasetType"
                   className="input-field font-mono"
                   value={datasetType}
                   onChange={(e) => setDatasetType(e.target.value)}
@@ -409,14 +413,17 @@ export default function DatasetManager() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
+                <label htmlFor="dataset-file" className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
                   Upload File
                 </label>
                 <div className="relative border-2 border-dashed border-obsidian-border rounded-tactical p-8 text-center hover:border-tactical-primary/50 transition-all cursor-pointer bg-obsidian-surface/30">
                   <input
+                    id="dataset-file"
+                    name="datasetFile"
                     type="file"
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                     onChange={handleFileSelect}
+                    accept=".jsonl,.json,.csv"
                   />
                   <Upload className="w-10 h-10 mx-auto mb-3 text-tactical-text-muted" />
                   <p className="text-sm text-tactical-text-secondary mb-1">
@@ -449,8 +456,10 @@ export default function DatasetManager() {
                 </label>
                 <div className="grid grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-xs text-tactical-text-muted mb-1">Train %</label>
+                    <label htmlFor="train-split" className="block text-xs text-tactical-text-muted mb-1">Train %</label>
                     <input
+                      id="train-split"
+                      name="trainSplit"
                       type="number"
                       className="input-field font-mono"
                       placeholder="80"
@@ -459,8 +468,10 @@ export default function DatasetManager() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-tactical-text-muted mb-1">Val %</label>
+                    <label htmlFor="val-split" className="block text-xs text-tactical-text-muted mb-1">Val %</label>
                     <input
+                      id="val-split"
+                      name="valSplit"
                       type="number"
                       className="input-field font-mono"
                       placeholder="15"
@@ -469,8 +480,10 @@ export default function DatasetManager() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-tactical-text-muted mb-1">Test %</label>
+                    <label htmlFor="test-split" className="block text-xs text-tactical-text-muted mb-1">Test %</label>
                     <input
+                      id="test-split"
+                      name="testSplit"
                       type="number"
                       className="input-field font-mono"
                       placeholder="5"

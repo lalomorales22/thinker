@@ -189,6 +189,7 @@ class ChatMessage(BaseModel):
 class AssistantRequest(BaseModel):
     messages: List[ChatMessage]
     context: Optional[Dict[str, Any]] = None  # Dataset info, available models, etc.
+    model: Optional[str] = None  # Selected Ollama model
 
 class AssistantResponse(BaseModel):
     message: str
@@ -196,7 +197,7 @@ class AssistantResponse(BaseModel):
     actions: Optional[List[Dict[str, Any]]] = None
 
 # Ollama integration for AI responses
-async def generate_ai_response_ollama(messages: List[ChatMessage], context: Optional[Dict] = None) -> AssistantResponse:
+async def generate_ai_response_ollama(messages: List[ChatMessage], context: Optional[Dict] = None, model: Optional[str] = None) -> AssistantResponse:
     """
     Generate AI assistant response using Ollama.
     Falls back to mock responses if Ollama is unavailable.
@@ -204,6 +205,9 @@ async def generate_ai_response_ollama(messages: List[ChatMessage], context: Opti
     # Try Ollama first
     try:
         ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+
+        # Use provided model or fall back to env var or default
+        selected_model = model or os.getenv("OLLAMA_MODEL", "llama3.2")
 
         # Format messages for Ollama
         ollama_messages = [{"role": "system", "content": ASSISTANT_SYSTEM_PROMPT}]
@@ -214,7 +218,7 @@ async def generate_ai_response_ollama(messages: List[ChatMessage], context: Opti
             response = await client.post(
                 f"{ollama_url}/api/chat",
                 json={
-                    "model": os.getenv("OLLAMA_MODEL", "llama3.2"),
+                    "model": selected_model,
                     "messages": ollama_messages,
                     "stream": False
                 }
@@ -341,7 +345,7 @@ async def chat_with_assistant(request: AssistantRequest):
     Uses Ollama for responses, falls back to pattern matching if unavailable.
     """
     try:
-        response = await generate_ai_response_ollama(request.messages, request.context)
+        response = await generate_ai_response_ollama(request.messages, request.context, request.model)
         return response
 
     except Exception as e:

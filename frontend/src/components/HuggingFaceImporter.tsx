@@ -40,6 +40,7 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
   const [trainingType, setTrainingType] = useState<'SL' | 'DPO'>('SL');
+  const [quickImportPath, setQuickImportPath] = useState('');
 
   const searchDatasets = async () => {
     try {
@@ -61,6 +62,31 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
       setStep(2);
     } catch (error) {
       console.error('Error fetching dataset info:', error);
+    }
+  };
+
+  const quickImportDataset = async () => {
+    if (!quickImportPath.trim()) return;
+
+    try {
+      // Create a dummy dataset result
+      const dataset: DatasetSearchResult = {
+        name: quickImportPath.trim(),
+        description: 'Quick import from HuggingFace',
+        downloads: 0,
+        likes: 0,
+        tags: []
+      };
+
+      setSelectedDataset(dataset);
+      const response = await fetch(`http://localhost:8000/api/huggingface/info/${encodeURIComponent(quickImportPath.trim())}`);
+      const info = await response.json();
+      setDatasetInfo(info);
+      setSelectedSplit(info.splits[0] || 'train');
+      setStep(2); // Go to split selection
+    } catch (error) {
+      console.error('Error loading dataset:', error);
+      alert('Failed to load dataset. Please check the dataset path and try again.');
     }
   };
 
@@ -198,14 +224,54 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
           {/* Step 1: Search */}
           {step === 1 && (
             <div className="space-y-6">
+              {/* Quick Import Section */}
+              <div className="p-4 bg-gradient-to-br from-cyan-900/20 to-blue-900/20 border border-cyan-500/30 rounded-lg">
+                <div className="flex items-start gap-3 mb-3">
+                  <Info className="w-5 h-5 text-cyan-400 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h3 className="text-sm font-semibold text-cyan-300 mb-1">Quick Import</h3>
+                    <p className="text-xs text-cyan-200/80">Paste a HuggingFace dataset path to import directly (e.g., "openai/gsm8k", "Anthropic/hh-rlhf")</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    id="quick-import-path"
+                    name="quickImportPath"
+                    type="text"
+                    value={quickImportPath}
+                    onChange={(e) => setQuickImportPath(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && quickImportDataset()}
+                    placeholder="e.g., openai/gsm8k, Anthropic/hh-rlhf, HuggingFaceH4/ultrafeedback_binarized"
+                    className="flex-1 px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 text-sm"
+                  />
+                  <button
+                    onClick={quickImportDataset}
+                    disabled={!quickImportPath.trim()}
+                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white rounded-lg transition-colors whitespace-nowrap flex items-center gap-2"
+                  >
+                    <Download className="w-4 h-4" />
+                    Load
+                  </button>
+                </div>
+              </div>
+
+              {/* Or Divider */}
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-px bg-gray-700"></div>
+                <span className="text-xs text-gray-500 uppercase">Or Search</span>
+                <div className="flex-1 h-px bg-gray-700"></div>
+              </div>
+
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
+                <label htmlFor="hf-search" className="block text-sm font-medium text-gray-300 mb-2">
                   Search Datasets
                 </label>
                 <div className="flex gap-2">
                   <div className="flex-1 relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
                     <input
+                      id="hf-search"
+                      name="huggingfaceSearch"
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
@@ -276,10 +342,12 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
+                <label htmlFor="hf-split" className="block text-sm font-medium text-gray-300 mb-2">
                   Select Split
                 </label>
                 <select
+                  id="hf-split"
+                  name="split"
                   value={selectedSplit}
                   onChange={(e) => setSelectedSplit(e.target.value)}
                   className="w-full px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
@@ -293,10 +361,12 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
+                <label htmlFor="hf-training-type" className="block text-sm font-medium text-gray-300 mb-2">
                   Training Type
                 </label>
                 <select
+                  id="hf-training-type"
+                  name="trainingType"
                   value={trainingType}
                   onChange={(e) => setTrainingType(e.target.value as 'SL' | 'DPO')}
                   className="w-full px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
