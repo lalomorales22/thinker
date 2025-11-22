@@ -505,7 +505,7 @@ export default function DatasetManager() {
               <button
                 className="btn btn-primary flex items-center gap-2"
                 onClick={handleUpload}
-                disabled={!uploadFile || !datasetName || !isValidated}
+                disabled={!uploadFile || !datasetName}
               >
                 <Upload className="w-4 h-4" />
                 Upload Dataset

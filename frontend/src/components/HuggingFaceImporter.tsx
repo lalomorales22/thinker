@@ -95,7 +95,15 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
 
     try {
       const response = await fetch(
-        `http://localhost:8000/api/huggingface/suggest-mapping?dataset_name=${encodeURIComponent(selectedDataset.name)}&training_type=${trainingType}`
+        `http://localhost:8000/api/huggingface/suggest-mapping`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            dataset_name: selectedDataset.name,
+            training_type: trainingType
+          })
+        }
       );
       const data = await response.json();
       const mappings = data.suggestions.map((s: any) => ({
