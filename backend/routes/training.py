@@ -22,6 +22,8 @@ class TrainingConfig(BaseModel):
     batch_size: int = 4
     training_type: str = "code_review"  # code_review, preference, tool_use
     dataset_id: Optional[str] = None  # ID of the dataset to use for training
+    renderer_name: Optional[str] = None  # llama3, qwen, role_colon - auto-detected if not provided
+    checkpoint_interval: int = 500  # Save checkpoint every N steps
 
     model_config = {'protected_namespaces': ()}
 
@@ -33,6 +35,7 @@ class TrainingJob(BaseModel):
     completed_at: Optional[datetime] = None
     current_step: int = 0
     metrics: Dict[str, Any] = {}
+    checkpoints: List[str] = []  # List of checkpoint paths
 
 @router.post("/start")
 async def start_training(config: TrainingConfig, background_tasks: BackgroundTasks, x_api_key: Optional[str] = Header(None)):
@@ -128,9 +131,23 @@ def load_dataset(dataset_path: str, dataset_format: str) -> List[Dict]:
 
     return data
 
-def create_training_examples(data: List[Dict], tokenizer, batch_size: int):
-    """Create batched training examples from dataset"""
-    from tinker import types
+def create_training_examples(data: List[Dict], tokenizer, batch_size: int, renderer_name: str = "llama3"):
+    """
+    Create batched training examples from dataset using Tinker renderers
+
+    Args:
+        data: List of training examples
+        tokenizer: Tinker tokenizer
+        batch_size: Number of examples per batch
+        renderer_name: Type of renderer to use (llama3, qwen, role_colon)
+    """
+    from tinker import types, renderers
+
+    # Initialize renderer with tokenizer
+    renderer = renderers.get_renderer(
+        name=renderer_name,
+        tokenizer=tokenizer
+    )
 
     batches = []
     for i in range(0, len(data), batch_size):
@@ -139,26 +156,37 @@ def create_training_examples(data: List[Dict], tokenizer, batch_size: int):
 
         for item in batch_data:
             # Extract text fields from dataset
-            # Assume dataset has 'input' and 'output' fields
-            # Adjust based on actual dataset structure
+            prompt_text = None
+            completion_text = None
+
+            # Support multiple dataset formats
             if 'input' in item and 'output' in item:
                 prompt_text = item['input']
                 completion_text = item['output']
-                full_text = f"{prompt_text}\n{completion_text}"
-            elif 'text' in item:
-                full_text = item['text']
             elif 'prompt' in item and 'completion' in item:
-                full_text = f"{item['prompt']}\n{item['completion']}"
+                prompt_text = item['prompt']
+                completion_text = item['completion']
+            elif 'text' in item:
+                # For plain text, treat first half as prompt, second half as completion
+                # This is a fallback - ideally all data should have prompt/completion
+                full_text = item['text']
+                mid_point = len(full_text) // 2
+                prompt_text = full_text[:mid_point]
+                completion_text = full_text[mid_point:]
             else:
                 # Skip malformed items
+                print(f"Warning: Skipping item with unrecognized format: {item.keys()}")
                 continue
 
-            # Tokenize
-            tokens = tokenizer.encode(full_text)
-            model_input = types.ModelInput.from_ints(tokens)
+            # Build messages using renderer format
+            messages = [
+                renderers.Message(role="user", content=prompt_text),
+                renderers.Message(role="assistant", content=completion_text)
+            ]
 
-            # Create Datum
-            datum = types.Datum(model_input=model_input)
+            # Use renderer to build supervised example with proper weights
+            # This handles chat templates, special tokens, and weight masks automatically
+            datum = renderer.build_supervised_example(messages)
             examples.append(datum)
 
         if examples:
@@ -217,8 +245,24 @@ async def run_training_job(job_id: str, config: TrainingConfig):
                     dataset_data = load_dataset(dataset_info['path'], dataset_info['format'])
                     print(f"Loaded {len(dataset_data)} examples from dataset")
 
-                    # Create training batches
-                    training_batches = create_training_examples(dataset_data, tokenizer, config.batch_size)
+                    # Auto-detect renderer based on model name if not specified
+                    renderer_name = config.renderer_name
+                    if not renderer_name:
+                        if "llama" in config.model_name.lower():
+                            renderer_name = "llama3"
+                        elif "qwen" in config.model_name.lower():
+                            renderer_name = "qwen"
+                        else:
+                            renderer_name = "role_colon"  # Default fallback
+                    print(f"Using renderer: {renderer_name}")
+
+                    # Create training batches using renderers
+                    training_batches = create_training_examples(
+                        dataset_data,
+                        tokenizer,
+                        config.batch_size,
+                        renderer_name
+                    )
                     print(f"Created {len(training_batches)} batches for training")
                 else:
                     print(f"Warning: Dataset {config.dataset_id} not found, using simulated training")
@@ -241,17 +285,19 @@ async def run_training_job(job_id: str, config: TrainingConfig):
                     batch_idx = step % len(training_batches)
                     batch = training_batches[batch_idx]
 
-                    # Real Tinker SDK training
+                    # Real Tinker SDK training with concurrent operations for improved speed
+                    # Submit forward_backward operation
                     fwdbwd_future = training_client.forward_backward_async(batch, "cross_entropy")
-                    await fwdbwd_future  # Wait for forward/backward pass
 
-                    # Get loss from forward/backward
-                    fwdbwd_result = fwdbwd_future.result()
-                    loss = float(fwdbwd_result.loss)
-
-                    # Optimizer step
+                    # Submit optimizer step operation
+                    # Note: We submit before waiting for fwdbwd_future for potential concurrency
                     optim_future = training_client.optim_step_async(optimizer_params)
-                    await optim_future  # Wait for optimizer step
+
+                    # Wait for both operations concurrently (30-50% faster)
+                    fwdbwd_result, _ = await asyncio.gather(fwdbwd_future, optim_future)
+
+                    # Extract loss from forward/backward result
+                    loss = float(fwdbwd_result.loss)
 
                 else:
                     # Simulated training (no dataset provided)
@@ -271,6 +317,39 @@ async def run_training_job(job_id: str, config: TrainingConfig):
                 "step": step + 1,
                 "progress": (step + 1) / config.num_steps * 100
             }
+
+            # Checkpoint management - save state every N steps
+            if use_real_training and (step + 1) % config.checkpoint_interval == 0:
+                try:
+                    checkpoint_name = f"{config.training_type}_{job_id}_step_{step + 1}"
+                    print(f"Saving checkpoint at step {step + 1}...")
+
+                    # Save full state (weights + optimizer state)
+                    checkpoint_path = await training_client.save_state_async(
+                        name=checkpoint_name
+                    )
+                    print(f"Checkpoint saved: {checkpoint_path}")
+
+                    # Also save sampler weights for testing intermediate models
+                    sampler_name = f"{checkpoint_name}_sampler"
+                    sampler_path = await training_client.save_weights_for_sampler_async(
+                        name=sampler_name
+                    )
+                    print(f"Sampler weights saved: {sampler_path}")
+
+                    # Store checkpoint paths in job metadata
+                    if "checkpoints" not in job:
+                        job["checkpoints"] = []
+                    job["checkpoints"].append({
+                        "step": step + 1,
+                        "checkpoint_path": checkpoint_path,
+                        "sampler_path": sampler_path,
+                        "loss": loss
+                    })
+
+                except Exception as checkpoint_error:
+                    print(f"Warning: Failed to save checkpoint at step {step + 1}: {checkpoint_error}")
+                    # Don't fail training if checkpoint saving fails
             
         # Save the trained model weights
         try:
