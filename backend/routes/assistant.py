@@ -7,11 +7,29 @@ from typing import List, Optional, Dict, Any
 import os
 import json
 from datetime import datetime
+import httpx
 
 router = APIRouter()
 
 # System prompt with comprehensive Tinker SDK knowledge
-ASSISTANT_SYSTEM_PROMPT = """You are an AI training assistant for Thinker, helping users train custom language models using the Tinker SDK from Thinking Machines Lab.
+ASSISTANT_SYSTEM_PROMPT = """You are an AI training assistant for Thinker, a full-stack AI training platform built by lalo for training self-evolving AI agents.
+
+## About Thinker Application
+
+Thinker is an IDE-like platform that showcases every capability of the Tinker SDK from Thinking Machines Lab. It provides:
+
+**6 Main Views:**
+1. **Training Dashboard** - Create & monitor training jobs (SL, RL, RLHF, DPO)
+2. **Models Library** - Browse, manage, export trained models
+3. **Dataset Manager** - Upload & manage training datasets with HuggingFace import
+4. **Playground** - Interactive code review & chat with Monaco editor
+5. **Analytics** - Training metrics, charts, evaluation results
+6. **Multi-Agent Arena** - Agents compete and collaborate in tournament/swarm modes
+
+**Your Role:**
+You help users navigate this platform, understand training options, configure jobs, troubleshoot issues, and make the most of the Tinker SDK.
+
+## Your Knowledge Base - Tinker SDK from Thinking Machines Lab
 
 ## Your Knowledge Base
 
@@ -177,12 +195,58 @@ class AssistantResponse(BaseModel):
     suggested_config: Optional[Dict[str, Any]] = None
     actions: Optional[List[Dict[str, Any]]] = None
 
-# Mock AI response function (in production, this would call Tinker API or OpenAI)
-async def generate_ai_response(messages: List[ChatMessage], context: Optional[Dict] = None) -> AssistantResponse:
+# Ollama integration for AI responses
+async def generate_ai_response_ollama(messages: List[ChatMessage], context: Optional[Dict] = None) -> AssistantResponse:
     """
-    Generate AI assistant response.
-    In production, this would call Tinker's API or OpenAI with the system prompt.
-    For now, we'll provide intelligent mock responses based on conversation state.
+    Generate AI assistant response using Ollama.
+    Falls back to mock responses if Ollama is unavailable.
+    """
+    # Try Ollama first
+    try:
+        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+
+        # Format messages for Ollama
+        ollama_messages = [{"role": "system", "content": ASSISTANT_SYSTEM_PROMPT}]
+        for msg in messages:
+            ollama_messages.append({"role": msg.role, "content": msg.content})
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{ollama_url}/api/chat",
+                json={
+                    "model": os.getenv("OLLAMA_MODEL", "llama3.2"),
+                    "messages": ollama_messages,
+                    "stream": False
+                }
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                ai_message = result.get("message", {}).get("content", "")
+
+                # Try to extract config if the AI suggests one
+                suggested_config = None
+                if "training_type" in ai_message.lower() or "configuration" in ai_message.lower():
+                    # Simple heuristic - if AI is making suggestions, parse them
+                    # This is a simple implementation - could be improved with structured output
+                    pass
+
+                return AssistantResponse(
+                    message=ai_message,
+                    suggested_config=suggested_config,
+                    actions=None
+                )
+    except Exception as e:
+        print(f"Ollama request failed: {e}. Falling back to pattern matching.")
+
+    # Fallback to pattern matching if Ollama fails
+    return generate_ai_response_fallback(messages, context)
+
+# Fallback function with pattern matching (original mock implementation)
+def generate_ai_response_fallback(messages: List[ChatMessage], context: Optional[Dict] = None) -> AssistantResponse:
+    """
+    Fallback AI assistant response using pattern matching.
+    Used when Ollama is unavailable.
     """
     user_message = messages[-1].content.lower()
 
@@ -274,16 +338,36 @@ async def generate_ai_response(messages: List[ChatMessage], context: Optional[Di
 async def chat_with_assistant(request: AssistantRequest):
     """
     Chat with AI training assistant.
-    Provides natural language interface for model training.
+    Uses Ollama for responses, falls back to pattern matching if unavailable.
     """
     try:
-        # In production, call Tinker API or OpenAI with ASSISTANT_SYSTEM_PROMPT
-        # For now, use intelligent mock responses
-        response = await generate_ai_response(request.messages, request.context)
+        response = await generate_ai_response_ollama(request.messages, request.context)
         return response
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Assistant error: {str(e)}")
+
+@router.get("/models")
+async def get_ollama_models():
+    """
+    Get list of available Ollama models.
+    """
+    try:
+        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{ollama_url}/api/tags")
+
+            if response.status_code == 200:
+                data = response.json()
+                models = [{"name": model["name"], "size": model.get("size", 0)}
+                         for model in data.get("models", [])]
+                return {"models": models, "available": True}
+            else:
+                return {"models": [], "available": False, "error": "Ollama server responded with error"}
+
+    except Exception as e:
+        return {"models": [], "available": False, "error": f"Ollama not available: {str(e)}"}
 
 @router.post("/suggest-config")
 async def suggest_config(

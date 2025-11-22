@@ -9,3 +9,4 @@ websockets==13.1
 python-multipart==0.0.12
 datasets==3.1.0
 huggingface-hub==0.26.2
+httpx==0.25.2
