@@ -1,4 +1,4 @@
-import { Upload, Trash2, Eye, Database, Download, GitBranch } from 'lucide-react'
+import { Upload, Trash2, Eye, Database, Download, GitBranch, Loader2 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
 import DatasetValidator from '../components/DatasetValidator'
@@ -38,6 +38,8 @@ export default function DatasetManager() {
   const [showValidator, setShowValidator] = useState(false)
   const [isValidated, setIsValidated] = useState(false)
   const [showHFImporter, setShowHFImporter] = useState(false)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
 
   // Fetch datasets
   useEffect(() => {
@@ -92,6 +94,9 @@ export default function DatasetManager() {
   const handleUpload = async () => {
     if (!uploadFile || !datasetName) return
 
+    setIsUploading(true)
+    setUploadError(null)
+
     const formData = new FormData()
     formData.append('file', uploadFile)
     formData.append('name', datasetName)
@@ -111,15 +116,22 @@ export default function DatasetManager() {
       })
 
       if (response.ok) {
+        // Success - close modal and reset form
         setShowUploadModal(false)
         setUploadFile(null)
         setDatasetName('')
-        // Refresh list will happen via poll or we can trigger it manually
+        setIsValidated(false)
+        setUploadError(null)
+        // Refresh list will happen via poll
       } else {
-        console.error('Upload failed')
+        // Error - show error message to user
+        const errorData = await response.json().catch(() => ({ detail: 'Upload failed' }))
+        setUploadError(errorData.detail || `Upload failed with status ${response.status}`)
       }
     } catch (error) {
-      console.error('Error uploading:', error)
+      setUploadError(error instanceof Error ? error.message : 'Network error. Please check your connection and try again.')
+    } finally {
+      setIsUploading(false)
     }
   }
 
@@ -495,20 +507,39 @@ export default function DatasetManager() {
               </div>
             </div>
 
+            {/* Error Display */}
+            {uploadError && (
+              <div className="px-6 pb-4">
+                <div className="p-3 rounded-tactical bg-red-900/20 border border-red-500/30 flex items-start gap-2">
+                  <span className="text-red-400 text-sm">{uploadError}</span>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-end gap-3 p-6 pt-0">
               <button
                 className="btn btn-ghost"
                 onClick={() => setShowUploadModal(false)}
+                disabled={isUploading}
               >
                 Cancel
               </button>
               <button
                 className="btn btn-primary flex items-center gap-2"
                 onClick={handleUpload}
-                disabled={!uploadFile || !datasetName}
+                disabled={!uploadFile || !datasetName || isUploading}
               >
-                <Upload className="w-4 h-4" />
-                Upload Dataset
+                {isUploading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" />
+                    Upload Dataset
+                  </>
+                )}
               </button>
             </div>
           </div>

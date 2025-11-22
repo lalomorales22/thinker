@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles, BookOpen, Loader2, Server } from 'lucide-react';
+import { useStore } from '../store/useStore';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -22,6 +23,7 @@ interface AITrainingAssistantProps {
 }
 
 export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistantProps) {
+  const backendUrl = useStore((state) => state.backendUrl);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'assistant',
@@ -51,7 +53,7 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
 
   const checkOllamaAvailability = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/assistant/models');
+      const response = await fetch(`${backendUrl}/api/assistant/models`);
       const data = await response.json();
       setOllamaAvailable(data.available);
       setAvailableModels(data.models || []);
@@ -74,7 +76,7 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
     setIsLoading(true);
 
     try {
-      const response = await fetch('http://localhost:8000/api/assistant/chat', {
+      const response = await fetch(`${backendUrl}/api/assistant/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
