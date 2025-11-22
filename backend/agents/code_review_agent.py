@@ -49,11 +49,11 @@ class CodeReviewAgent:
             # Only print if we haven't warned before or if debugging
             pass
 
-    def _get_sampling_client(self):
+    async def _get_sampling_client(self):
         """Lazy load sampling client"""
         self._ensure_client()
         if not self.sampling_client and self.service_client:
-            # In a real app, we might load a specific checkpoint. 
+            # In a real app, we might load a specific checkpoint.
             # For now, we'll assume we're using a base model or a specific fine-tuned one.
             # Note: save_weights_and_get_sampling_client is usually for trained models.
             # For base models, we might need a different approach or just use the training client's sample?
@@ -61,7 +61,7 @@ class CodeReviewAgent:
             # So we might just need a TrainingClient even for sampling if we are "training" it or using it as a base.
             try:
                 # If we have a trained model, we'd load it. For now, let's create a client for the base model.
-                self.training_client = self.service_client.create_lora_training_client(
+                self.training_client = await self.service_client.create_lora_training_client_async(
                     base_model=self.base_model,
                     rank=32 # Default rank
                 )
@@ -74,7 +74,7 @@ class CodeReviewAgent:
         """
         Review code and provide feedback using Tinker SDK
         """
-        client = self._get_sampling_client()
+        client = await self._get_sampling_client()
         
         if client and types:
             try:

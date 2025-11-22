@@ -124,7 +124,7 @@ async def run_training_job(job_id: str, config: TrainingConfig):
     try:
         # Initialize client
         service_client = tinker.ServiceClient()
-        training_client = service_client.create_lora_training_client(
+        training_client = await service_client.create_lora_training_client_async(
             base_model=config.model_name,
             rank=config.rank
         )

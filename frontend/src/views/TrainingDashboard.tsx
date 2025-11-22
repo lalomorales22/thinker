@@ -100,6 +100,32 @@ export default function TrainingDashboard() {
     }
   }
 
+  const handleDeleteJob = async (jobId: string) => {
+    try {
+      const response = await fetch(`${backendUrl}/api/training/jobs/${jobId}`, {
+        method: 'DELETE',
+        headers: {
+          'X-API-Key': apiKey
+        }
+      })
+
+      if (response.ok) {
+        // Refresh jobs list
+        setJobs(jobs.filter(j => j.id !== jobId))
+      } else {
+        console.error('Failed to delete job')
+      }
+    } catch (error) {
+      console.error('Error deleting job:', error)
+    }
+  }
+
+  const handleToggleJob = async (jobId: string, currentStatus: string) => {
+    // For now, this is a placeholder since pause/resume isn't fully implemented in backend
+    console.log(`Toggle job ${jobId} from ${currentStatus}`)
+    // TODO: Implement pause/resume API endpoint in backend
+  }
+
   const getStatusLED = (status: string) => {
     switch (status) {
       case 'running': return 'led-cyan'
@@ -329,14 +355,20 @@ export default function TrainingDashboard() {
                           <span className={`px-2 py-0.5 rounded-tactical-sm text-xs font-medium border ${badge.bg} ${badge.text} ${badge.border}`}>
                             {job.trainingType}
                           </span>
-                          <button className="btn btn-ghost btn-xs p-1">
+                          <button
+                            className="btn btn-ghost btn-xs p-1"
+                            onClick={() => handleToggleJob(job.id, job.status)}
+                          >
                             {job.status === 'running' ? (
                               <Pause className="w-3.5 h-3.5" />
                             ) : (
                               <Play className="w-3.5 h-3.5" />
                             )}
                           </button>
-                          <button className="btn btn-ghost btn-xs p-1 text-led-red hover:text-led-red">
+                          <button
+                            className="btn btn-ghost btn-xs p-1 text-led-red hover:text-led-red"
+                            onClick={() => handleDeleteJob(job.id)}
+                          >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
@@ -423,8 +455,8 @@ export default function TrainingDashboard() {
                 >
                   <option value="Qwen/Qwen3-30B-A3B-Base">Qwen/Qwen3-30B-A3B-Base</option>
                   <option value="Qwen/Qwen3-8B-Base">Qwen/Qwen3-8B-Base</option>
-                  <option value="Llama-3.1-8B">Llama-3.1-8B</option>
-                  <option value="Llama-3.2-1B">Llama-3.2-1B</option>
+                  <option value="meta-llama/Llama-3.1-8B">meta-llama/Llama-3.1-8B</option>
+                  <option value="meta-llama/Llama-3.2-1B">meta-llama/Llama-3.2-1B</option>
                 </select>
               </div>
 

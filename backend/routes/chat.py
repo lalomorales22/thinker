@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import os
+from agents.code_review_agent import CodeReviewAgent
 
 router = APIRouter()
 
@@ -44,7 +45,7 @@ async def chat_completion(request: ChatRequest, x_api_key: Optional[str] = Heade
     
     # We'll use the review_code method's internal logic but adapted
     # Since review_code is specific, let's just use the agent's client if available
-    client = agent._get_sampling_client()
+    client = await agent._get_sampling_client()
     
     if client:
         try:
