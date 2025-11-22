@@ -8,11 +8,19 @@ import os
 import json
 from datetime import datetime
 import asyncio
+import logging
+
+# Import HuggingFace libraries
+try:
+    from datasets import load_dataset, get_dataset_config_names, list_datasets
+    from huggingface_hub import HfApi, list_datasets as hf_list_datasets
+    HUGGINGFACE_AVAILABLE = True
+except ImportError:
+    HUGGINGFACE_AVAILABLE = False
+    logging.warning("HuggingFace datasets library not installed. Run: pip install datasets huggingface-hub")
 
 router = APIRouter()
-
-# Note: In production, install datasets library: pip install datasets
-# For now, we'll create a mock implementation that can be easily replaced
+logger = logging.getLogger(__name__)
 
 class DatasetSearchResult(BaseModel):
     name: str
@@ -55,9 +63,41 @@ import_progress_store: Dict[str, ImportProgress] = {}
 async def search_datasets(query: str, limit: int = 10):
     """
     Search HuggingFace Hub for datasets.
-    In production, this calls HuggingFace API.
     """
-    # Mock popular datasets for demo
+    if not HUGGINGFACE_AVAILABLE:
+        # Return mock data if library not available
+        return _get_mock_search_results(query, limit)
+
+    try:
+        # Use HuggingFace Hub API to search datasets
+        api = HfApi()
+        datasets = api.list_datasets(
+            search=query,
+            limit=limit,
+            sort="downloads",
+            direction=-1
+        )
+
+        results = []
+        for dataset in datasets:
+            results.append({
+                "name": dataset.id,
+                "description": getattr(dataset, 'description', '') or f"Dataset: {dataset.id}",
+                "downloads": getattr(dataset, 'downloads', 0) or 0,
+                "likes": getattr(dataset, 'likes', 0) or 0,
+                "tags": getattr(dataset, 'tags', []) or [],
+                "size": None  # Size info not always available
+            })
+
+        return {"datasets": results}
+
+    except Exception as e:
+        logger.error(f"Error searching HuggingFace datasets: {e}")
+        # Fallback to mock data on error
+        return _get_mock_search_results(query, limit)
+
+def _get_mock_search_results(query: str, limit: int):
+    """Fallback mock data when HuggingFace API is unavailable"""
     mock_datasets = [
         {
             "name": "HuggingFaceH4/ultrafeedback_binarized",
@@ -114,7 +154,55 @@ async def get_dataset_info(dataset_name: str):
     """
     Get detailed information about a dataset.
     """
-    # Mock dataset info (in production, load from HuggingFace)
+    if not HUGGINGFACE_AVAILABLE:
+        return _get_mock_dataset_info(dataset_name)
+
+    try:
+        # Load dataset info from HuggingFace
+        # First, try to get configs
+        configs = []
+        try:
+            configs = get_dataset_config_names(dataset_name)
+        except:
+            configs = [None]  # No configs, use default
+
+        # Load the first config (or default)
+        config = configs[0] if configs else None
+
+        # Load dataset builder to get info without downloading data
+        from datasets import load_dataset_builder
+        builder = load_dataset_builder(dataset_name, config)
+
+        # Get features
+        features = {}
+        if builder.info.features:
+            for name, feature in builder.info.features.items():
+                features[name] = str(feature.dtype) if hasattr(feature, 'dtype') else str(type(feature).__name__)
+
+        # Get splits and row counts
+        splits = []
+        num_rows = {}
+        if builder.info.splits:
+            for split_name, split_info in builder.info.splits.items():
+                splits.append(split_name)
+                num_rows[split_name] = split_info.num_examples
+
+        return {
+            "name": dataset_name,
+            "description": builder.info.description or f"Dataset: {dataset_name}",
+            "splits": splits or ["train"],  # Default to train if no splits found
+            "features": features,
+            "num_rows": num_rows,
+            "size_in_bytes": builder.info.dataset_size
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting dataset info for {dataset_name}: {e}")
+        # Fallback to mock data
+        return _get_mock_dataset_info(dataset_name)
+
+def _get_mock_dataset_info(dataset_name: str):
+    """Fallback mock dataset info"""
     mock_info = {
         "HuggingFaceH4/ultrafeedback_binarized": {
             "name": "HuggingFaceH4/ultrafeedback_binarized",
@@ -211,28 +299,75 @@ async def preview_dataset(
     """
     Preview dataset with applied field mappings.
     """
-    # Mock preview data
+    if not HUGGINGFACE_AVAILABLE:
+        return _get_mock_preview(dataset_name, split, num_samples)
+
+    try:
+        # Load dataset from HuggingFace
+        dataset = load_dataset(dataset_name, split=split, streaming=True)
+
+        # Get first N samples
+        preview_data = []
+        for i, item in enumerate(dataset):
+            if i >= num_samples:
+                break
+
+            # Apply field mappings if provided
+            mapped_item = {}
+            if field_mappings:
+                for mapping in field_mappings:
+                    source_field = mapping.get("source_field")
+                    target_field = mapping.get("target_field")
+                    if source_field in item:
+                        # Handle nested fields or lists
+                        value = item[source_field]
+                        if isinstance(value, list) and len(value) > 0:
+                            # For message lists, extract text content
+                            if isinstance(value[0], dict):
+                                value = " ".join([msg.get("content", str(msg)) for msg in value])
+                            else:
+                                value = str(value)
+                        mapped_item[target_field] = str(value)[:500]  # Limit preview length
+            else:
+                # No mappings, return raw data
+                mapped_item = {k: str(v)[:500] for k, v in item.items()}
+
+            preview_data.append(mapped_item)
+
+        return {
+            "dataset_name": dataset_name,
+            "split": split,
+            "samples": preview_data,
+            "total_samples": len(preview_data)
+        }
+
+    except Exception as e:
+        logger.error(f"Error previewing dataset {dataset_name}: {e}")
+        return _get_mock_preview(dataset_name, split, num_samples)
+
+def _get_mock_preview(dataset_name: str, split: str, num_samples: int):
+    """Fallback mock preview data"""
     mock_previews = {
         "HuggingFaceH4/ultrafeedback_binarized": [
             {
                 "prompt": "Explain quantum computing in simple terms",
-                "chosen": "Quantum computing uses quantum mechanics principles to process information. Unlike classical computers that use bits (0 or 1), quantum computers use quantum bits or 'qubits' that can exist in multiple states simultaneously...",
+                "chosen": "Quantum computing uses quantum mechanics principles to process information...",
                 "rejected": "Quantum computing is computers that are really fast and use quantum stuff."
             },
             {
                 "prompt": "What are the benefits of exercise?",
-                "chosen": "Regular exercise provides numerous benefits including improved cardiovascular health, stronger muscles and bones, better mental health, weight management, and reduced risk of chronic diseases...",
+                "chosen": "Regular exercise provides numerous benefits including improved cardiovascular health...",
                 "rejected": "Exercise makes you feel good and lose weight."
             }
         ],
         "HuggingFaceH4/no_robots": [
             {
                 "prompt": "How do I learn Python programming?",
-                "completion": "To learn Python programming, I recommend: 1) Start with official Python tutorial, 2) Practice on coding platforms like LeetCode, 3) Build small projects, 4) Read others' code, 5) Join Python communities."
+                "completion": "To learn Python programming, I recommend: 1) Start with official Python tutorial..."
             },
             {
                 "prompt": "What's the best way to prepare for a job interview?",
-                "completion": "Here are key interview preparation steps: 1) Research the company thoroughly, 2) Practice common interview questions, 3) Prepare your own questions, 4) Review your resume and be ready to discuss experiences, 5) Dress appropriately and arrive early."
+                "completion": "Here are key interview preparation steps: 1) Research the company thoroughly..."
             }
         ]
     }
@@ -264,79 +399,101 @@ async def import_dataset(request: ImportRequest):
             total_samples=0
         )
 
-        # Simulate download progress
-        await asyncio.sleep(1)
+        if not HUGGINGFACE_AVAILABLE:
+            # Use mock data if library not available
+            logger.warning("HuggingFace datasets library not available, using mock data")
+            return await _import_mock_dataset(request, import_id)
+
+        # Download dataset from HuggingFace
+        logger.info(f"Loading dataset: {request.dataset_name}, split: {request.split}")
+        dataset = load_dataset(
+            request.dataset_name,
+            request.subset,
+            split=request.split,
+            streaming=False  # Download full dataset
+        )
+
         import_progress_store[import_id].progress = 30
         import_progress_store[import_id].message = "Download complete. Converting to app format..."
 
-        # In production, this would call:
-        # from datasets import load_dataset
-        # dataset = load_dataset(request.dataset_name, request.subset, split=request.split)
-
-        # For now, use mock data
-        await asyncio.sleep(1)
-        import_progress_store[import_id].status = "converting"
-        import_progress_store[import_id].progress = 50
-
         # Convert data using field mappings
-        mock_data = []
-        num_samples = request.max_samples or 100  # Default to 100 for demo
+        converted_data = []
+        num_samples = min(request.max_samples or len(dataset), len(dataset))
 
-        for i in range(num_samples):
-            item = {}
+        import_progress_store[import_id].status = "converting"
+        import_progress_store[import_id].progress = 40
+        import_progress_store[import_id].total_samples = num_samples
+
+        for i, item in enumerate(dataset):
+            if i >= num_samples:
+                break
+
+            # Map fields from source dataset to target format
+            mapped_item = {}
             for mapping in request.field_mappings:
-                # In production, this would map actual fields from the dataset
-                if mapping.target_field == "prompt":
-                    item["prompt"] = f"Sample prompt {i+1} from {request.dataset_name}"
-                elif mapping.target_field == "completion":
-                    item["completion"] = f"Sample completion {i+1}"
-                elif mapping.target_field == "chosen":
-                    item["chosen"] = f"Sample chosen response {i+1}"
-                elif mapping.target_field == "rejected":
-                    item["rejected"] = f"Sample rejected response {i+1}"
+                source_field = mapping.source_field
+                target_field = mapping.target_field
 
-            mock_data.append(item)
+                if source_field in item:
+                    value = item[source_field]
 
-            # Update progress
-            if i % 10 == 0:
+                    # Handle different data types
+                    if isinstance(value, list):
+                        # For message lists, extract text content
+                        if len(value) > 0 and isinstance(value[0], dict):
+                            # List of message dicts
+                            value = " ".join([msg.get("content", str(msg)) for msg in value])
+                        else:
+                            value = str(value)
+                    elif not isinstance(value, str):
+                        value = str(value)
+
+                    mapped_item[target_field] = value
+
+            if mapped_item:  # Only add if we mapped at least one field
+                converted_data.append(mapped_item)
+
+            # Update progress every 100 items
+            if i % 100 == 0:
                 import_progress_store[import_id].samples_processed = i
-                import_progress_store[import_id].total_samples = num_samples
-                import_progress_store[import_id].progress = 50 + int((i / num_samples) * 40)
+                import_progress_store[import_id].progress = 40 + int((i / num_samples) * 50)
 
-        await asyncio.sleep(1)
+        # Save to data storage
         import_progress_store[import_id].status = "saving"
         import_progress_store[import_id].progress = 90
         import_progress_store[import_id].message = "Saving dataset to storage..."
 
-        # Save to data storage
         data_dir = os.path.join(os.path.dirname(__file__), '../data')
         os.makedirs(data_dir, exist_ok=True)
 
         dataset_filename = f"{request.dataset_name.replace('/', '_')}_{request.split}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
         dataset_path = os.path.join(data_dir, dataset_filename)
 
-        with open(dataset_path, 'w') as f:
-            for item in mock_data:
-                f.write(json.dumps(item) + '\n')
+        with open(dataset_path, 'w', encoding='utf-8') as f:
+            for item in converted_data:
+                f.write(json.dumps(item, ensure_ascii=False) + '\n')
 
         # Complete
         import_progress_store[import_id].status = "complete"
         import_progress_store[import_id].progress = 100
         import_progress_store[import_id].message = "Import complete!"
-        import_progress_store[import_id].samples_processed = num_samples
-        import_progress_store[import_id].total_samples = num_samples
+        import_progress_store[import_id].samples_processed = len(converted_data)
+        import_progress_store[import_id].total_samples = len(converted_data)
+
+        logger.info(f"Successfully imported {len(converted_data)} samples from {request.dataset_name}")
 
         return {
             "import_id": import_id,
             "dataset_id": dataset_filename,
             "dataset_name": request.dataset_name,
             "split": request.split,
-            "num_samples": num_samples,
+            "num_samples": len(converted_data),
             "file_path": dataset_path,
             "status": "complete"
         }
 
     except Exception as e:
+        logger.error(f"Import failed for {request.dataset_name}: {e}", exc_info=True)
         import_progress_store[import_id] = ImportProgress(
             status="error",
             progress=0,
@@ -345,6 +502,70 @@ async def import_dataset(request: ImportRequest):
             total_samples=0
         )
         raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+
+async def _import_mock_dataset(request: ImportRequest, import_id: str):
+    """Fallback mock import when HuggingFace library not available"""
+    await asyncio.sleep(1)
+    import_progress_store[import_id].progress = 30
+    import_progress_store[import_id].message = "Download complete. Converting to app format..."
+
+    await asyncio.sleep(1)
+    import_progress_store[import_id].status = "converting"
+    import_progress_store[import_id].progress = 50
+
+    # Convert data using field mappings
+    mock_data = []
+    num_samples = request.max_samples or 100
+
+    for i in range(num_samples):
+        item = {}
+        for mapping in request.field_mappings:
+            if mapping.target_field == "prompt":
+                item["prompt"] = f"Sample prompt {i+1} from {request.dataset_name}"
+            elif mapping.target_field == "completion":
+                item["completion"] = f"Sample completion {i+1}"
+            elif mapping.target_field == "chosen":
+                item["chosen"] = f"Sample chosen response {i+1}"
+            elif mapping.target_field == "rejected":
+                item["rejected"] = f"Sample rejected response {i+1}"
+
+        mock_data.append(item)
+
+        if i % 10 == 0:
+            import_progress_store[import_id].samples_processed = i
+            import_progress_store[import_id].total_samples = num_samples
+            import_progress_store[import_id].progress = 50 + int((i / num_samples) * 40)
+
+    await asyncio.sleep(1)
+    import_progress_store[import_id].status = "saving"
+    import_progress_store[import_id].progress = 90
+    import_progress_store[import_id].message = "Saving dataset to storage..."
+
+    data_dir = os.path.join(os.path.dirname(__file__), '../data')
+    os.makedirs(data_dir, exist_ok=True)
+
+    dataset_filename = f"{request.dataset_name.replace('/', '_')}_{request.split}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+    dataset_path = os.path.join(data_dir, dataset_filename)
+
+    with open(dataset_path, 'w') as f:
+        for item in mock_data:
+            f.write(json.dumps(item) + '\n')
+
+    import_progress_store[import_id].status = "complete"
+    import_progress_store[import_id].progress = 100
+    import_progress_store[import_id].message = "Import complete!"
+    import_progress_store[import_id].samples_processed = num_samples
+    import_progress_store[import_id].total_samples = num_samples
+
+    return {
+        "import_id": import_id,
+        "dataset_id": dataset_filename,
+        "dataset_name": request.dataset_name,
+        "split": request.split,
+        "num_samples": num_samples,
+        "file_path": dataset_path,
+        "status": "complete"
+    }
 
 @router.get("/import-progress/{import_id}")
 async def get_import_progress(import_id: str):

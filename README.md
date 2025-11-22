@@ -94,6 +94,7 @@ npm run dev
 - **[BUILD.md](BUILD.md)** - Complete vision, technical roadmap & revolutionary features
 - **[HOW_TO_USE.md](HOW_TO_USE.md)** - Comprehensive user guide with training types, metrics glossary, and troubleshooting
 - **[TRAINING_GUIDE.md](TRAINING_GUIDE.md)** - Step-by-step training guide from zero to production model
+- **[HUGGINGFACE_IMPORT.md](HUGGINGFACE_IMPORT.md)** - 🆕 Git-clone style dataset importing from HuggingFace Hub
 
 ## 🎯 Vision
 
@@ -175,9 +176,16 @@ See [BUILD.md](BUILD.md) for the complete roadmap of revolutionary features.
   - File cleanup on upload failures
   - Encoding detection and fallback handling
 
+**✅ Latest Update: Real HuggingFace Dataset Import**
+- ✅ Actual HuggingFace datasets library integration (git-clone style)
+- ✅ Search and browse thousands of datasets from HuggingFace Hub
+- ✅ Real-time dataset download and conversion
+- ✅ Automatic field mapping for SL and DPO training types
+- ✅ Preview datasets before importing
+- ✅ See [HUGGINGFACE_IMPORT.md](HUGGINGFACE_IMPORT.md) for detailed usage guide
+
 **🔜 Next Steps:**
 - Add Recharts data visualizations to Analytics view
-- Implement actual HuggingFace datasets library integration
 - Add real-time multi-agent visualization
 - Expand AI assistant with more training strategies
 - Expand test coverage to 80%+
