@@ -1,4 +1,4 @@
-import { Play, Pause, Trash2, Plus, Clock, Zap, TrendingUp, Server, Cpu, Activity, Target, Database as DatabaseIcon, Brain, GitBranch } from 'lucide-react'
+import { Play, Pause, Trash2, Plus, Clock, Zap, TrendingUp, Server, Cpu, Activity, Target, Database as DatabaseIcon, Brain, GitBranch, Info, HelpCircle } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
 
@@ -33,6 +33,9 @@ export default function TrainingDashboard() {
   const [loraRank, setLoraRank] = useState('32')
   const [batchSize, setBatchSize] = useState('4')
   const [totalSteps, setTotalSteps] = useState('100')
+  const [showTrainingTypeInfo, setShowTrainingTypeInfo] = useState(false)
+  const [showMetricsInfo, setShowMetricsInfo] = useState(false)
+  const [selectedMetric, setSelectedMetric] = useState<string>('')
 
   // Fetch datasets on mount
   useEffect(() => {
@@ -509,9 +512,18 @@ export default function TrainingDashboard() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
-                  Training Type
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide">
+                    Training Type
+                  </label>
+                  <button
+                    className="text-led-cyan hover:text-led-cyan/80 transition-colors"
+                    onClick={() => setShowTrainingTypeInfo(true)}
+                    title="Learn about training types"
+                  >
+                    <Info className="w-4 h-4" />
+                  </button>
+                </div>
                 <div className="grid grid-cols-4 gap-2">
                   {['SL', 'RL', 'RLHF', 'DPO'].map((type) => {
                     const badge = getTypeBadge(type as any)
@@ -531,9 +543,18 @@ export default function TrainingDashboard() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
-                    Learning Rate
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide">
+                      Learning Rate
+                    </label>
+                    <button
+                      className="text-led-cyan/60 hover:text-led-cyan transition-colors"
+                      onClick={() => { setSelectedMetric('learningRate'); setShowMetricsInfo(true); }}
+                      title="Learn about learning rate"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                   <input
                     type="text"
                     className="input-field font-mono"
@@ -543,9 +564,18 @@ export default function TrainingDashboard() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
-                    LoRA Rank
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide">
+                      LoRA Rank
+                    </label>
+                    <button
+                      className="text-led-cyan/60 hover:text-led-cyan transition-colors"
+                      onClick={() => { setSelectedMetric('loraRank'); setShowMetricsInfo(true); }}
+                      title="Learn about LoRA rank"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                   <input
                     type="text"
                     className="input-field font-mono"
@@ -558,9 +588,18 @@ export default function TrainingDashboard() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
-                    Batch Size
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide">
+                      Batch Size
+                    </label>
+                    <button
+                      className="text-led-cyan/60 hover:text-led-cyan transition-colors"
+                      onClick={() => { setSelectedMetric('batchSize'); setShowMetricsInfo(true); }}
+                      title="Learn about batch size"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                   <input
                     type="text"
                     className="input-field font-mono"
@@ -570,9 +609,18 @@ export default function TrainingDashboard() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
-                    Total Steps
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide">
+                      Total Steps
+                    </label>
+                    <button
+                      className="text-led-cyan/60 hover:text-led-cyan transition-colors"
+                      onClick={() => { setSelectedMetric('totalSteps'); setShowMetricsInfo(true); }}
+                      title="Learn about total steps"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                   <input
                     type="text"
                     className="input-field font-mono"
@@ -595,6 +643,185 @@ export default function TrainingDashboard() {
                 <Play className="w-4 h-4" />
                 Deploy Job
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Training Type Info Modal */}
+      {showTrainingTypeInfo && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="tactical-panel-elevated w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <div className="tactical-panel-header sticky top-0 z-10">
+              <div className="flex items-center gap-2">
+                <Info className="w-4 h-4 text-led-cyan" />
+                <span className="font-semibold uppercase tracking-wide">Training Type Guide</span>
+              </div>
+              <button className="btn btn-ghost btn-xs p-1" onClick={() => setShowTrainingTypeInfo(false)}>
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* SL */}
+              <div className="tactical-panel p-4 border-l-4 border-led-blue">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="px-2 py-1 rounded-tactical-sm text-sm font-bold bg-led-blue/20 text-led-blue border border-led-blue/30">SL</span>
+                  <h3 className="font-bold text-lg">Supervised Learning</h3>
+                </div>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-blue">What it is:</strong> The model learns from labeled input→output examples.
+                </p>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-blue">When to use:</strong> You have correct examples (e.g., code + review pairs), task has clear right/wrong answers, you want the model to mimic your examples.
+                </p>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-blue">How it works:</strong> Model sees input, predicts output token by token, compares to correct output, adjusts to make correct output more likely.
+                </p>
+                <p className="text-sm text-tactical-text-secondary">
+                  <strong className="text-led-blue">Example:</strong> Code review pairs, Q&A datasets, text + summary pairs.
+                </p>
+              </div>
+
+              {/* RL */}
+              <div className="tactical-panel p-4 border-l-4 border-led-green">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="px-2 py-1 rounded-tactical-sm text-sm font-bold bg-led-green/20 text-led-green border border-led-green/30">RL</span>
+                  <h3 className="font-bold text-lg">Reinforcement Learning</h3>
+                </div>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-green">What it is:</strong> The model learns from rewards/scores, not perfect examples.
+                </p>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-green">When to use:</strong> You can score outputs but don't have perfect examples, task has many correct answers, you want to optimize for a metric.
+                </p>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-green">How it works:</strong> Model generates multiple outputs, each gets a reward score, high-reward outputs are reinforced, low-reward outputs are suppressed.
+                </p>
+                <p className="text-sm text-tactical-text-secondary">
+                  <strong className="text-led-green">Example:</strong> Code that passes tests (+1 reward), fast code (reward based on speed), user feedback (thumbs up/down).
+                </p>
+              </div>
+
+              {/* RLHF */}
+              <div className="tactical-panel p-4 border-l-4 border-led-purple">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="px-2 py-1 rounded-tactical-sm text-sm font-bold bg-led-purple/20 text-led-purple border border-led-purple/30">RLHF</span>
+                  <h3 className="font-bold text-lg">RL from Human Feedback</h3>
+                </div>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-purple">What it is:</strong> Two-stage training using human preferences.
+                </p>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-purple">When to use:</strong> You have pairwise comparisons (A is better than B), humans can judge quality but can't create perfect examples, you want to align with subjective preferences.
+                </p>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-purple">How it works:</strong> <span className="text-led-cyan">Stage 1:</span> Train reward model from human preferences. <span className="text-led-cyan">Stage 2:</span> Use reward model scores for RL training.
+                </p>
+                <p className="text-sm text-tactical-text-secondary">
+                  <strong className="text-led-purple">Dataset format:</strong> Prompt + chosen response + rejected response pairs.
+                </p>
+              </div>
+
+              {/* DPO */}
+              <div className="tactical-panel p-4 border-l-4 border-led-orange">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="px-2 py-1 rounded-tactical-sm text-sm font-bold bg-led-orange/20 text-led-orange border border-led-orange/30">DPO</span>
+                  <h3 className="font-bold text-lg">Direct Preference Optimization</h3>
+                </div>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-orange">What it is:</strong> Learn from preferences WITHOUT a separate reward model.
+                </p>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-orange">When to use:</strong> Same as RLHF but you want simpler/faster training.
+                </p>
+                <p className="text-sm text-tactical-text-secondary mb-3">
+                  <strong className="text-led-orange">How it works:</strong> Directly update model to increase P(chosen) and decrease P(rejected). One-stage instead of two-stage like RLHF.
+                </p>
+                <p className="text-sm text-tactical-text-secondary">
+                  <strong className="text-led-orange">Advantages:</strong> Simpler (one model vs two), faster (no reward model training), more stable (no RL optimization issues).
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Metrics Info Modal */}
+      {showMetricsInfo && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="tactical-panel-elevated w-full max-w-2xl">
+            <div className="tactical-panel-header">
+              <div className="flex items-center gap-2">
+                <HelpCircle className="w-4 h-4 text-led-cyan" />
+                <span className="font-semibold uppercase tracking-wide">Metric Guide</span>
+              </div>
+              <button className="btn btn-ghost btn-xs p-1" onClick={() => setShowMetricsInfo(false)}>
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6">
+              {selectedMetric === 'learningRate' && (
+                <div className="space-y-3">
+                  <h3 className="font-bold text-lg text-led-cyan">Learning Rate</h3>
+                  <div className="space-y-2 text-sm">
+                    <p><strong className="text-tactical-text-primary">What:</strong> <span className="text-tactical-text-secondary">Size of optimization steps during training.</span></p>
+                    <p><strong className="text-tactical-text-primary">LoRA Typical:</strong> <span className="text-tactical-text-secondary font-mono">1e-4 to 5e-4</span></p>
+                    <p><strong className="text-tactical-text-primary">Full Fine-tune Typical:</strong> <span className="text-tactical-text-secondary font-mono">1e-5 to 5e-5</span></p>
+                    <div className="tactical-panel p-3 bg-led-red/10 border border-led-red/20">
+                      <p className="text-xs"><strong className="text-led-red">⚠ Too high:</strong> Training unstable, loss increases or spikes</p>
+                      <p className="text-xs"><strong className="text-led-yellow">⚠ Too low:</strong> Training extremely slow, may not converge</p>
+                    </div>
+                    <p className="text-xs text-tactical-text-muted italic">Tip: Start with 1e-4 for LoRA training. Reduce by half if you see loss spikes.</p>
+                  </div>
+                </div>
+              )}
+
+              {selectedMetric === 'loraRank' && (
+                <div className="space-y-3">
+                  <h3 className="font-bold text-lg text-led-cyan">LoRA Rank</h3>
+                  <div className="space-y-2 text-sm">
+                    <p><strong className="text-tactical-text-primary">What:</strong> <span className="text-tactical-text-secondary">Model capacity/parameter count for LoRA adapters.</span></p>
+                    <p><strong className="text-tactical-text-primary">Low (16-32):</strong> <span className="text-tactical-text-secondary">Fast training, good for small datasets (&lt;1000 examples)</span></p>
+                    <p><strong className="text-tactical-text-primary">High (64-128):</strong> <span className="text-tactical-text-secondary">Slower training, better for large datasets (&gt;10k examples)</span></p>
+                    <div className="tactical-panel p-3 bg-led-cyan/10 border border-led-cyan/20">
+                      <p className="text-xs"><strong className="text-led-cyan">📊 Tradeoff:</strong> Higher rank = more capacity but slower training and more memory</p>
+                    </div>
+                    <p className="text-xs text-tactical-text-muted italic">Tip: Start with 32 for most tasks. Use 64+ only if your model isn't learning well.</p>
+                  </div>
+                </div>
+              )}
+
+              {selectedMetric === 'batchSize' && (
+                <div className="space-y-3">
+                  <h3 className="font-bold text-lg text-led-cyan">Batch Size</h3>
+                  <div className="space-y-2 text-sm">
+                    <p><strong className="text-tactical-text-primary">What:</strong> <span className="text-tactical-text-secondary">Number of examples processed together in one training step.</span></p>
+                    <p><strong className="text-tactical-text-primary">Larger (8-16):</strong> <span className="text-tactical-text-secondary">Faster training, needs more GPU memory, more stable gradients</span></p>
+                    <p><strong className="text-tactical-text-primary">Smaller (1-4):</strong> <span className="text-tactical-text-secondary">Slower training, less GPU memory, noisier gradients</span></p>
+                    <div className="tactical-panel p-3 bg-led-orange/10 border border-led-orange/20">
+                      <p className="text-xs"><strong className="text-led-orange">💡 Memory:</strong> If you get out-of-memory errors, reduce batch size</p>
+                    </div>
+                    <p className="text-xs text-tactical-text-muted italic">Tip: Use 4-8 for most LoRA training. Larger batches generally give better results.</p>
+                  </div>
+                </div>
+              )}
+
+              {selectedMetric === 'totalSteps' && (
+                <div className="space-y-3">
+                  <h3 className="font-bold text-lg text-led-cyan">Total Steps</h3>
+                  <div className="space-y-2 text-sm">
+                    <p><strong className="text-tactical-text-primary">What:</strong> <span className="text-tactical-text-secondary">Total number of training iterations/updates.</span></p>
+                    <p><strong className="text-tactical-text-primary">Formula:</strong> <span className="text-tactical-text-secondary font-mono">steps = (dataset_size / batch_size) * num_epochs</span></p>
+                    <p><strong className="text-tactical-text-primary">Example:</strong> <span className="text-tactical-text-secondary">1000 examples, batch size 4, 2 epochs = 500 steps</span></p>
+                    <div className="tactical-panel p-3 bg-led-green/10 border border-led-green/20">
+                      <p className="text-xs"><strong className="text-led-green">✓ Sweet spot:</strong> 2-3 epochs is usually optimal. More can lead to overfitting.</p>
+                    </div>
+                    <p className="text-xs text-tactical-text-muted italic">Tip: Monitor loss - when it stops improving, you can stop training early.</p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

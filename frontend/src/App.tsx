@@ -9,12 +9,7 @@ import {
   BarChart3,
   Terminal as TerminalIcon,
   Bot,
-  ChevronDown,
-  ChevronUp,
-  ChevronLeft,
-  ChevronRight,
   X,
-  Maximize2,
   Minimize2
 } from 'lucide-react'
 import { useStore } from './store/useStore'
@@ -29,8 +24,8 @@ function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [showTerminal, setShowTerminal] = useState(true)
   const [showAssistant, setShowAssistant] = useState(true)
-  const [terminalHeight, setTerminalHeight] = useState(200)
-  const [assistantWidth, setAssistantWidth] = useState(320)
+  const [terminalHeight] = useState(200)
+  const [assistantWidth] = useState(320)
   const { currentView, setCurrentView } = useStore()
 
   const [terminalLogs] = useState([
