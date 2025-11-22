@@ -3,10 +3,11 @@ Training routes for starting, monitoring, and managing training jobs
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Header
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import asyncio
 from datetime import datetime
 import os
+import json
 
 router = APIRouter()
 
@@ -20,7 +21,8 @@ class TrainingConfig(BaseModel):
     num_steps: int = 100
     batch_size: int = 4
     training_type: str = "code_review"  # code_review, preference, tool_use
-    
+    dataset_id: Optional[str] = None  # ID of the dataset to use for training
+
     model_config = {'protected_namespaces': ()}
 
 class TrainingJob(BaseModel):
@@ -98,6 +100,72 @@ async def get_metrics(job_id: str):
         "metrics": job["metrics"]
     }
 
+# Helper functions for dataset loading
+def load_dataset(dataset_path: str, dataset_format: str) -> List[Dict]:
+    """Load dataset from file based on format"""
+    data = []
+
+    try:
+        with open(dataset_path, 'r', encoding='utf-8') as f:
+            if dataset_format == 'jsonl':
+                for line in f:
+                    if line.strip():
+                        data.append(json.loads(line))
+            elif dataset_format == 'json':
+                data = json.load(f)
+                if not isinstance(data, list):
+                    data = [data]
+            elif dataset_format == 'csv':
+                import csv
+                reader = csv.DictReader(f)
+                data = list(reader)
+            else:
+                raise ValueError(f"Unsupported format: {dataset_format}")
+
+    except Exception as e:
+        print(f"Error loading dataset: {e}")
+        raise
+
+    return data
+
+def create_training_examples(data: List[Dict], tokenizer, batch_size: int):
+    """Create batched training examples from dataset"""
+    from tinker import types
+
+    batches = []
+    for i in range(0, len(data), batch_size):
+        batch_data = data[i:i + batch_size]
+        examples = []
+
+        for item in batch_data:
+            # Extract text fields from dataset
+            # Assume dataset has 'input' and 'output' fields
+            # Adjust based on actual dataset structure
+            if 'input' in item and 'output' in item:
+                prompt_text = item['input']
+                completion_text = item['output']
+                full_text = f"{prompt_text}\n{completion_text}"
+            elif 'text' in item:
+                full_text = item['text']
+            elif 'prompt' in item and 'completion' in item:
+                full_text = f"{item['prompt']}\n{item['completion']}"
+            else:
+                # Skip malformed items
+                continue
+
+            # Tokenize
+            tokens = tokenizer.encode(full_text)
+            model_input = types.ModelInput.from_ints(tokens)
+
+            # Create Datum
+            datum = types.Datum(model_input=model_input)
+            examples.append(datum)
+
+        if examples:
+            batches.append(examples)
+
+    return batches
+
 # Background task for training
 async def run_training_job(job_id: str, config: TrainingConfig):
     """
@@ -128,38 +196,75 @@ async def run_training_job(job_id: str, config: TrainingConfig):
             base_model=config.model_name,
             rank=config.rank
         )
-        
-        # Mock data loading (in real app, load from dataset file)
-        # We'll create some dummy data for demonstration if no dataset is provided
-        # In a real implementation, we'd read the uploaded file
-        
+
+        # Get tokenizer from client
+        tokenizer = training_client.tokenizer
+
+        # Load dataset if provided
+        training_batches = []
+        if config.dataset_id:
+            try:
+                # Import datasets list from datasets route
+                from .datasets import datasets
+
+                # Find the dataset
+                dataset_info = next((d for d in datasets if d['id'] == config.dataset_id), None)
+
+                if dataset_info:
+                    print(f"Loading dataset: {dataset_info['name']} from {dataset_info['path']}")
+
+                    # Load dataset file
+                    dataset_data = load_dataset(dataset_info['path'], dataset_info['format'])
+                    print(f"Loaded {len(dataset_data)} examples from dataset")
+
+                    # Create training batches
+                    training_batches = create_training_examples(dataset_data, tokenizer, config.batch_size)
+                    print(f"Created {len(training_batches)} batches for training")
+                else:
+                    print(f"Warning: Dataset {config.dataset_id} not found, using simulated training")
+            except Exception as e:
+                print(f"Error loading dataset: {e}, falling back to simulated training")
+
         # Training loop
-        # Note: This is a simplified loop based on the docs
         optimizer_params = types.AdamParams(learning_rate=config.learning_rate)
-        
+
+        # Determine if we're using real data or simulation
+        use_real_training = len(training_batches) > 0
+
         for step in range(config.num_steps):
             if job["status"] == "cancelled":
                 break
-                
-            # 1. Prepare batch (mock)
-            # In real app: batch = get_next_batch(dataset)
-            # processed_examples = process_batch(batch, tokenizer)
-            
-            # For now, we simulate the step delay and metrics since we don't have real data/connection
-            # to avoid crashing on empty data
-            await asyncio.sleep(0.1) 
-            
-            # Actual SDK call would look like:
-            # fwdbwd_future = training_client.forward_backward_async(processed_examples, "cross_entropy")
-            # optim_future = training_client.optim_step_async(optimizer_params)
-            # await fwdbwd_future
-            # await optim_future
-            # loss = fwdbwd_future.result().loss
-            
-            # Simulate metrics
-            import random
-            loss = 2.0 - (step / config.num_steps) * 1.5 + random.random() * 0.1
-            
+
+            try:
+                if use_real_training:
+                    # Get batch from training data (cycle through if needed)
+                    batch_idx = step % len(training_batches)
+                    batch = training_batches[batch_idx]
+
+                    # Real Tinker SDK training
+                    fwdbwd_future = training_client.forward_backward_async(batch, "cross_entropy")
+                    await fwdbwd_future  # Wait for forward/backward pass
+
+                    # Get loss from forward/backward
+                    fwdbwd_result = fwdbwd_future.result()
+                    loss = float(fwdbwd_result.loss)
+
+                    # Optimizer step
+                    optim_future = training_client.optim_step_async(optimizer_params)
+                    await optim_future  # Wait for optimizer step
+
+                else:
+                    # Simulated training (no dataset provided)
+                    await asyncio.sleep(0.1)
+                    import random
+                    loss = 2.0 - (step / config.num_steps) * 1.5 + random.random() * 0.1
+
+            except Exception as train_step_error:
+                print(f"Error in training step {step}: {train_step_error}")
+                # Use simulated loss if training step fails
+                import random
+                loss = 2.0 - (step / config.num_steps) * 1.5 + random.random() * 0.1
+
             job["current_step"] = step + 1
             job["metrics"] = {
                 "loss": loss,

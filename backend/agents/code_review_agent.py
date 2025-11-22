@@ -23,8 +23,9 @@ class CodeReviewAgent:
     Self-Evolving Code Review Agent that improves over time
     """
 
-    def __init__(self, base_model: str = "meta-llama/Llama-3.2-1B"):
+    def __init__(self, base_model: str = "meta-llama/Llama-3.2-1B", checkpoint_path: Optional[str] = None):
         self.base_model = base_model
+        self.checkpoint_path = checkpoint_path  # If provided, load this checkpoint
         self.training_client = None
         self.sampling_client = None
         self.service_client = None
@@ -53,19 +54,24 @@ class CodeReviewAgent:
         """Lazy load sampling client"""
         self._ensure_client()
         if not self.sampling_client and self.service_client:
-            # In a real app, we might load a specific checkpoint.
-            # For now, we'll assume we're using a base model or a specific fine-tuned one.
-            # Note: save_weights_and_get_sampling_client is usually for trained models.
-            # For base models, we might need a different approach or just use the training client's sample?
-            # Actually, Tinker docs say: "The main object used for training is the TrainingClient... you can train and sample from."
-            # So we might just need a TrainingClient even for sampling if we are "training" it or using it as a base.
             try:
-                # If we have a trained model, we'd load it. For now, let's create a client for the base model.
+                # Create training client with base model
                 self.training_client = await self.service_client.create_lora_training_client_async(
                     base_model=self.base_model,
-                    rank=32 # Default rank
+                    rank=32  # Default rank
                 )
-                self.sampling_client = self.training_client # TrainingClient supports sample()
+
+                # If checkpoint path is provided, load the fine-tuned weights
+                if self.checkpoint_path and self.checkpoint_path.startswith("tinker://"):
+                    print(f"Loading checkpoint: {self.checkpoint_path}")
+                    try:
+                        await self.training_client.load_state(self.checkpoint_path)
+                        print(f"Successfully loaded checkpoint: {self.checkpoint_path}")
+                    except Exception as load_error:
+                        print(f"Warning: Failed to load checkpoint {self.checkpoint_path}: {load_error}")
+                        print("Continuing with base model instead")
+
+                self.sampling_client = self.training_client  # TrainingClient supports sample()
             except Exception as e:
                 print(f"Error creating sampling client: {e}")
         return self.sampling_client
@@ -130,25 +136,44 @@ class CodeReviewAgent:
                     }
                     
             except Exception as e:
-                print(f"Tinker sampling failed: {e}")
-                # Fallback to placeholder
-        
-        # Placeholder fallback
+                error_msg = str(e)
+                print(f"Tinker sampling failed: {error_msg}")
+                # Return error information
+                return {
+                    "review": {
+                        "summary": f"Error during code review: {error_msg}",
+                        "issues": [
+                            {
+                                "line": 1,
+                                "severity": "error",
+                                "message": f"Tinker SDK error: {error_msg}",
+                                "suggestion": "Verify API key is set and valid. Check model availability."
+                            }
+                        ],
+                        "score": 0,
+                        "suggestions": ["Check API configuration", "Verify model availability"]
+                    },
+                    "model": self.base_model,
+                    "error": error_msg
+                }
+
+        # If no client available
         return {
             "review": {
-                "summary": "Code review placeholder (Tinker SDK unavailable or failed)",
+                "summary": "Code review unavailable - Tinker SDK client not initialized",
                 "issues": [
                     {
                         "line": 1,
-                        "severity": "info",
-                        "message": "Tinker SDK not active. Using mock response.",
-                        "suggestion": "Set TINKER_API_KEY and ensure connectivity."
+                        "severity": "error",
+                        "message": "Tinker SDK client not initialized. Please set TINKER_API_KEY.",
+                        "suggestion": "Go to Settings and configure your API key."
                     }
                 ],
-                "score": 85,
-                "suggestions": ["Check API configuration"]
+                "score": 0,
+                "suggestions": ["Configure API key in Settings"]
             },
-            "model": self.base_model
+            "model": self.base_model,
+            "error": "SDK not initialized"
         }
 
     def self_review(self, original_review: Dict[str, Any]) -> Dict[str, Any]:
