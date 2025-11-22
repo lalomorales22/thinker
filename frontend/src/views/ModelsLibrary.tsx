@@ -45,31 +45,68 @@ export default function ModelsLibrary() {
   useEffect(() => {
     const fetchModels = async () => {
       try {
-        // Fetch base models
-        const response = await fetch(`${backendUrl}/api/models/base/available`, {
-          headers: {
-            'X-API-Key': apiKey
-          }
-        })
-        if (response.ok) {
-          const data = await response.json()
-          // Transform strings to Model objects
-          const fetchedModels: Model[] = data.models
-            .filter((item: any) => typeof item === 'string') // Only process strings
-            .map((name: string, index: number) => ({
-              id: `base-${index}`,
-              name: name.split('/').pop() || name,
-              baseModel: name,
-              type: 'base',
-              size: 'Unknown', // Could parse from name
-              checkpointPath: name,
-              trainingSteps: 0,
-              performance: {},
-              createdAt: new Date().toISOString().split('T')[0],
+        const allModels: Model[] = []
+
+        // Fetch trained/saved models first (so they appear at the top)
+        try {
+          const trainedResponse = await fetch(`${backendUrl}/api/models/`, {
+            headers: {
+              'X-API-Key': apiKey
+            }
+          })
+          if (trainedResponse.ok) {
+            const trainedData = await trainedResponse.json()
+            const trainedModels: Model[] = trainedData.models.map((model: any, index: number) => ({
+              id: `trained-${index}`,
+              name: model.name,
+              baseModel: model.base_model,
+              type: 'fine-tuned',
+              size: model.size_mb ? `${model.size_mb.toFixed(1)} MB` : 'Unknown',
+              checkpointPath: model.checkpoint_path || '',
+              trainingSteps: model.training_config?.num_steps || 0,
+              performance: {
+                loss: model.final_metrics?.loss
+              },
+              createdAt: model.created_at ? new Date(model.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
               isFavorite: false
             }))
-          setModels(fetchedModels)
+            allModels.push(...trainedModels)
+          }
+        } catch (error) {
+          console.error('Failed to fetch trained models:', error)
         }
+
+        // Fetch base models
+        try {
+          const baseResponse = await fetch(`${backendUrl}/api/models/base/available`, {
+            headers: {
+              'X-API-Key': apiKey
+            }
+          })
+          if (baseResponse.ok) {
+            const baseData = await baseResponse.json()
+            // Transform strings to Model objects
+            const baseModels: Model[] = baseData.models
+              .filter((item: any) => typeof item === 'string') // Only process strings
+              .map((name: string, index: number) => ({
+                id: `base-${index}`,
+                name: name.split('/').pop() || name,
+                baseModel: name,
+                type: 'base',
+                size: 'Unknown', // Could parse from name
+                checkpointPath: name,
+                trainingSteps: 0,
+                performance: {},
+                createdAt: new Date().toISOString().split('T')[0],
+                isFavorite: false
+              }))
+            allModels.push(...baseModels)
+          }
+        } catch (error) {
+          console.error('Failed to fetch base models:', error)
+        }
+
+        setModels(allModels)
       } catch (error) {
         console.error('Failed to fetch models:', error)
       }

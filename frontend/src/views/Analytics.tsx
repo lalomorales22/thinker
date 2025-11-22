@@ -1,5 +1,6 @@
 import { TrendingUp, Activity, Award, Target, BarChart3, LineChart } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useStore } from '../store/useStore'
 
 interface MetricCard {
   label: string
@@ -18,9 +19,82 @@ interface TrainingRun {
 }
 
 export default function Analytics() {
-  const [metrics] = useState<MetricCard[]>([])
-  const [trainingRuns] = useState<TrainingRun[]>([])
+  const backendUrl = useStore((state) => state.backendUrl)
+  const apiKey = useStore((state) => state.apiKey)
+  const [metrics, setMetrics] = useState<MetricCard[]>([])
+  const [trainingRuns, setTrainingRuns] = useState<TrainingRun[]>([])
   const [selectedTimeRange, setSelectedTimeRange] = useState('7d')
+
+  // Fetch analytics data
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      try {
+        // Fetch summary metrics
+        const summaryResponse = await fetch(`${backendUrl}/api/analytics/summary`, {
+          headers: {
+            'X-API-Key': apiKey
+          }
+        })
+        if (summaryResponse.ok) {
+          const summaryData = await summaryResponse.json()
+
+          // Transform backend metrics to frontend format
+          const fetchedMetrics: MetricCard[] = summaryData.metrics.map((metric: any) => ({
+            label: metric.label,
+            value: metric.value,
+            change: metric.change,
+            changeType: metric.trend === 'up' ? 'positive' : metric.trend === 'down' ? 'negative' : 'neutral',
+            icon: getIconForMetric(metric.label)
+          }))
+          setMetrics(fetchedMetrics)
+        }
+
+        // Fetch training runs
+        const runsResponse = await fetch(`${backendUrl}/api/analytics/training-runs`, {
+          headers: {
+            'X-API-Key': apiKey
+          }
+        })
+        if (runsResponse.ok) {
+          const runsData = await runsResponse.json()
+
+          // Transform backend training runs to frontend format
+          const fetchedRuns: TrainingRun[] = runsData.training_runs.map((run: any) => ({
+            name: run.name,
+            loss: run.loss || null,
+            reward: null,  // Not currently tracked
+            accuracy: null,  // Not currently tracked
+            steps: run.steps
+          }))
+          setTrainingRuns(fetchedRuns)
+        }
+      } catch (error) {
+        console.error('Failed to fetch analytics:', error)
+      }
+    }
+
+    fetchAnalytics()
+
+    // Refresh analytics every 5 seconds
+    const interval = setInterval(fetchAnalytics, 5000)
+    return () => clearInterval(interval)
+  }, [backendUrl, apiKey])
+
+  // Helper function to get icon for metric
+  const getIconForMetric = (label: string) => {
+    switch (label.toLowerCase()) {
+      case 'total models':
+        return Target
+      case 'training jobs':
+        return Activity
+      case 'success rate':
+        return Award
+      case 'gpu hours':
+        return TrendingUp
+      default:
+        return BarChart3
+    }
+  }
 
   return (
     <div className="h-full flex flex-col bg-obsidian-bg overflow-y-auto">
