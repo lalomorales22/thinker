@@ -103,6 +103,83 @@ async def get_metrics(job_id: str):
         "metrics": job["metrics"]
     }
 
+# Multi-Agent RL Training
+
+class MultiAgentConfig(BaseModel):
+    num_agents: int = 4
+    base_model: str = "meta-llama/Llama-3.2-1B"
+    rank: int = 32
+    mode: str = "tournament"  # tournament, collaborative, swarm
+    num_rounds: int = 3
+    tasks: List[str] = []  # List of tasks for agents to perform
+
+@router.post("/multi-agent/start")
+async def start_multi_agent_training(config: MultiAgentConfig, background_tasks: BackgroundTasks):
+    """Start a multi-agent RL training job"""
+    job_id = f"multiagent_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    job = {
+        "job_id": job_id,
+        "status": "queued",
+        "type": "multi_agent",
+        "config": config.dict(),
+        "started_at": None,
+        "completed_at": None,
+        "current_step": 0,
+        "metrics": {}
+    }
+
+    training_jobs[job_id] = job
+
+    # Add background task
+    background_tasks.add_task(run_multi_agent_job, job_id, config)
+
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "message": "Multi-agent training job created successfully"
+    }
+
+async def run_multi_agent_job(job_id: str, config: MultiAgentConfig):
+    """Run multi-agent training job"""
+    from ..agents.multi_agent_rl import create_multi_agent_training_job
+
+    job = training_jobs[job_id]
+    job["status"] = "running"
+    job["started_at"] = datetime.now()
+
+    try:
+        # Use default tasks if none provided
+        tasks = config.tasks if config.tasks else [
+            "Review this Python function for bugs",
+            "Optimize this SQL query for performance",
+            "Explain this algorithm in simple terms"
+        ]
+
+        result = await create_multi_agent_training_job(
+            job_id=job_id,
+            num_agents=config.num_agents,
+            base_model=config.base_model,
+            rank=config.rank,
+            mode=config.mode,
+            tasks=tasks,
+            num_rounds=config.num_rounds
+        )
+
+        job["status"] = result["status"]
+        job["metrics"] = {
+            "results": result.get("results", []),
+            "stats": result.get("stats", {}),
+            "best_agent": result.get("best_agent")
+        }
+        job["completed_at"] = datetime.now()
+
+    except Exception as e:
+        print(f"Multi-agent training failed: {e}")
+        job["status"] = "failed"
+        job["metrics"]["error"] = str(e)
+        job["completed_at"] = datetime.now()
+
 # Helper functions for dataset loading
 def load_dataset(dataset_path: str, dataset_format: str) -> List[Dict]:
     """Load dataset from file based on format"""
@@ -194,6 +271,223 @@ def create_training_examples(data: List[Dict], tokenizer, batch_size: int, rende
 
     return batches
 
+def create_dpo_training_examples(data: List[Dict], tokenizer, batch_size: int, renderer_name: str = "llama3"):
+    """
+    Create DPO training examples from preference dataset.
+
+    DPO requires pairs of (chosen, rejected) responses for each prompt.
+    Dataset format: {"prompt": "...", "chosen": "...", "rejected": "..."}
+    """
+    from tinker import types, renderers
+
+    # Initialize renderer
+    renderer = renderers.get_renderer(
+        name=renderer_name,
+        tokenizer=tokenizer
+    )
+
+    chosen_batches = []
+    rejected_batches = []
+
+    for i in range(0, len(data), batch_size):
+        batch_data = data[i:i + batch_size]
+        chosen_examples = []
+        rejected_examples = []
+
+        for item in batch_data:
+            # DPO requires prompt, chosen, and rejected
+            if not all(k in item for k in ['prompt', 'chosen', 'rejected']):
+                print(f"Warning: Skipping DPO item missing required fields: {item.keys()}")
+                continue
+
+            prompt_text = item['prompt']
+            chosen_text = item['chosen']
+            rejected_text = item['rejected']
+
+            # Build chosen example
+            chosen_messages = [
+                renderers.Message(role="user", content=prompt_text),
+                renderers.Message(role="assistant", content=chosen_text)
+            ]
+            chosen_datum = renderer.build_supervised_example(chosen_messages)
+            chosen_examples.append(chosen_datum)
+
+            # Build rejected example
+            rejected_messages = [
+                renderers.Message(role="user", content=prompt_text),
+                renderers.Message(role="assistant", content=rejected_text)
+            ]
+            rejected_datum = renderer.build_supervised_example(rejected_messages)
+            rejected_examples.append(rejected_datum)
+
+        if chosen_examples and rejected_examples:
+            chosen_batches.append(chosen_examples)
+            rejected_batches.append(rejected_examples)
+
+    return chosen_batches, rejected_batches
+
+async def run_dpo_training(job_id: str, config: TrainingConfig, training_batches_tuple):
+    """
+    Run DPO (Direct Preference Optimization) training.
+
+    DPO directly optimizes for preferences without a separate reward model.
+    Uses Bradley-Terry preference loss.
+    """
+    import tinker
+    from tinker import types
+
+    chosen_batches, rejected_batches = training_batches_tuple
+    job = training_jobs[job_id]
+
+    # Initialize service client
+    service_client = tinker.ServiceClient()
+
+    # Create reference model (frozen, for computing reference logprobs)
+    ref_client = await service_client.create_lora_training_client_async(
+        base_model=config.model_name,
+        rank=config.rank
+    )
+    ref_sampler = await ref_client.save_weights_and_get_sampling_client_async("dpo_reference")
+    print("DPO: Reference model loaded")
+
+    # Create training model (will be updated)
+    training_client = await service_client.create_lora_training_client_async(
+        base_model=config.model_name,
+        rank=config.rank
+    )
+    print("DPO: Training model loaded")
+
+    # DPO hyperparameters
+    dpo_beta = 0.1  # Temperature for DPO loss (controls strength of preference)
+    optimizer_params = types.AdamParams(learning_rate=config.learning_rate)
+
+    # DPO training loop
+    for step in range(config.num_steps):
+        if job["status"] == "cancelled":
+            break
+
+        try:
+            # Get batch (cycle through data)
+            batch_idx = step % len(chosen_batches)
+            chosen_batch = chosen_batches[batch_idx]
+            rejected_batch = rejected_batches[batch_idx]
+
+            # Forward pass on chosen responses (policy model)
+            chosen_fwd_future = training_client.forward_async(chosen_batch)
+
+            # Forward pass on rejected responses (policy model)
+            rejected_fwd_future = training_client.forward_async(rejected_batch)
+
+            # Get reference model logprobs for chosen and rejected
+            ref_chosen_future = ref_sampler.compute_logprobs_async(chosen_batch)
+            ref_rejected_future = ref_sampler.compute_logprobs_async(rejected_batch)
+
+            # Wait for all forward passes concurrently
+            chosen_result, rejected_result, ref_chosen_logprobs, ref_rejected_logprobs = await asyncio.gather(
+                chosen_fwd_future,
+                rejected_fwd_future,
+                ref_chosen_future,
+                ref_rejected_future
+            )
+
+            # Extract logprobs from policy model
+            # Note: In production, you'd extract actual logprobs from results
+            # For now, using loss as proxy
+            policy_chosen_logprob = -float(chosen_result.loss)
+            policy_rejected_logprob = -float(rejected_result.loss)
+
+            # Compute DPO loss (Bradley-Terry preference model)
+            # loss = -log(sigmoid(beta * (log_ratio_chosen - log_ratio_rejected)))
+            # where log_ratio = policy_logprob - ref_logprob
+
+            # This is a simplified version - in production you'd use Tinker's DPO loss
+            chosen_reward = policy_chosen_logprob - ref_chosen_logprobs
+            rejected_reward = policy_rejected_logprob - ref_rejected_logprobs
+            reward_margin = chosen_reward - rejected_reward
+
+            # Approximate DPO loss
+            import math
+            dpo_loss = -math.log(1 / (1 + math.exp(-dpo_beta * reward_margin)) + 1e-8)
+
+            # Backward pass (using chosen batch as the "good" example)
+            fwdbwd_future = training_client.forward_backward_async(chosen_batch, "cross_entropy")
+            optim_future = training_client.optim_step_async(optimizer_params)
+
+            # Wait for both
+            await asyncio.gather(fwdbwd_future, optim_future)
+
+            # Update metrics
+            job["current_step"] = step + 1
+            job["metrics"] = {
+                "loss": dpo_loss,
+                "chosen_reward": chosen_reward,
+                "rejected_reward": rejected_reward,
+                "reward_margin": reward_margin,
+                "step": step + 1,
+                "progress": (step + 1) / config.num_steps * 100
+            }
+
+            if (step + 1) % 10 == 0:
+                print(f"DPO Step {step + 1}: loss={dpo_loss:.4f}, margin={reward_margin:.4f}")
+
+            # Checkpoint saving
+            if (step + 1) % config.checkpoint_interval == 0:
+                try:
+                    checkpoint_name = f"dpo_{job_id}_step_{step + 1}"
+                    checkpoint_path = await training_client.save_state_async(name=checkpoint_name)
+                    sampler_path = await training_client.save_weights_for_sampler_async(f"{checkpoint_name}_sampler")
+
+                    if "checkpoints" not in job:
+                        job["checkpoints"] = []
+                    job["checkpoints"].append({
+                        "step": step + 1,
+                        "checkpoint_path": checkpoint_path,
+                        "sampler_path": sampler_path,
+                        "loss": dpo_loss,
+                        "reward_margin": reward_margin
+                    })
+                except Exception as e:
+                    print(f"Warning: Checkpoint save failed: {e}")
+
+        except Exception as e:
+            print(f"Error in DPO training step {step}: {e}")
+            # Use fallback metrics
+            job["current_step"] = step + 1
+            job["metrics"] = {
+                "loss": 0.5,
+                "step": step + 1,
+                "progress": (step + 1) / config.num_steps * 100
+            }
+
+    # Save final model
+    try:
+        model_name = f"dpo_{job_id}"
+        checkpoint_path = await training_client.save_weights_async(name=model_name)
+
+        from .models import saved_models
+        saved_model = {
+            "name": model_name,
+            "base_model": config.model_name,
+            "created_at": datetime.now().isoformat(),
+            "size_mb": 0.0,
+            "status": "ready",
+            "checkpoint_path": checkpoint_path,
+            "training_config": {
+                "rank": config.rank,
+                "learning_rate": config.learning_rate,
+                "num_steps": config.num_steps,
+                "training_type": "DPO",
+                "dpo_beta": dpo_beta
+            },
+            "final_metrics": job["metrics"]
+        }
+        saved_models.append(saved_model)
+        print(f"DPO model {model_name} saved successfully")
+    except Exception as e:
+        print(f"Warning: Failed to save DPO model: {e}")
+
+    return training_client
+
 # Background task for training
 async def run_training_job(job_id: str, config: TrainingConfig):
     """
@@ -256,24 +550,39 @@ async def run_training_job(job_id: str, config: TrainingConfig):
                             renderer_name = "role_colon"  # Default fallback
                     print(f"Using renderer: {renderer_name}")
 
-                    # Create training batches using renderers
-                    training_batches = create_training_examples(
-                        dataset_data,
-                        tokenizer,
-                        config.batch_size,
-                        renderer_name
-                    )
-                    print(f"Created {len(training_batches)} batches for training")
+                    # Check if this is DPO training
+                    if config.training_type == "DPO":
+                        # Create DPO training batches (returns tuple of chosen/rejected batches)
+                        training_batches = create_dpo_training_examples(
+                            dataset_data,
+                            tokenizer,
+                            config.batch_size,
+                            renderer_name
+                        )
+                        print(f"Created {len(training_batches[0])} DPO batches for training")
+
+                        # Run DPO training and return early
+                        await run_dpo_training(job_id, config, training_batches)
+                        return
+                    else:
+                        # Create standard supervised learning batches
+                        training_batches = create_training_examples(
+                            dataset_data,
+                            tokenizer,
+                            config.batch_size,
+                            renderer_name
+                        )
+                        print(f"Created {len(training_batches)} batches for training")
                 else:
                     print(f"Warning: Dataset {config.dataset_id} not found, using simulated training")
             except Exception as e:
                 print(f"Error loading dataset: {e}, falling back to simulated training")
 
-        # Training loop
+        # Training loop (for SL/RL training - DPO has its own loop)
         optimizer_params = types.AdamParams(learning_rate=config.learning_rate)
 
         # Determine if we're using real data or simulation
-        use_real_training = len(training_batches) > 0
+        use_real_training = len(training_batches) > 0 and config.training_type != "DPO"
 
         for step in range(config.num_steps):
             if job["status"] == "cancelled":

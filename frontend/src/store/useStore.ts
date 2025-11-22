@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type ViewType = 'code' | 'training' | 'models' | 'datasets' | 'playground' | 'analytics'
+export type ViewType = 'code' | 'training' | 'models' | 'datasets' | 'playground' | 'analytics' | 'multiagent'
 
 interface ThinkerStore {
   // Navigation

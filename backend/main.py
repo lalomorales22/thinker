@@ -19,7 +19,7 @@ import uvicorn
 from typing import List
 import asyncio
 
-from routes import training, models, chat, datasets, analytics
+from routes import training, models, chat, datasets, analytics, assistant, huggingface
 from agents.code_review_agent import CodeReviewAgent
 
 # WebSocket manager
@@ -74,6 +74,8 @@ app.include_router(models.router, prefix="/api/models", tags=["models"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
+app.include_router(assistant.router, prefix="/api/assistant", tags=["assistant"])
+app.include_router(huggingface.router, prefix="/api/huggingface", tags=["huggingface"])
 
 @app.get("/")
 async def root():
