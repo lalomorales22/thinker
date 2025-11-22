@@ -13,6 +13,8 @@ warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 import socketio
 import uvicorn
@@ -21,6 +23,14 @@ import asyncio
 
 from routes import training, models, chat, datasets, analytics, assistant, huggingface
 from agents.code_review_agent import CodeReviewAgent
+from utils import (
+    logger,
+    ThinkerException,
+    thinker_exception_handler,
+    http_exception_handler,
+    validation_exception_handler,
+    general_exception_handler,
+)
 
 # WebSocket manager
 class ConnectionManager:
@@ -46,11 +56,17 @@ manager = ConnectionManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    print("🧠 Thinker Backend Starting...")
-    print(f"Tinker API Key: {'✓ Set' if os.getenv('TINKER_API_KEY') else '✗ Missing'}")
+    logger.info("🧠 Thinker Backend Starting...")
+    api_key_status = '✓ Set' if os.getenv('TINKER_API_KEY') else '✗ Missing'
+    logger.info(f"Tinker API Key: {api_key_status}")
+
+    if not os.getenv('TINKER_API_KEY'):
+        logger.warning("Tinker API key not set. Training features will require API key header.")
+
     yield
+
     # Shutdown
-    print("🧠 Thinker Backend Shutting Down...")
+    logger.info("🧠 Thinker Backend Shutting Down...")
 
 app = FastAPI(
     title="Thinker API",
@@ -67,6 +83,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register exception handlers
+app.add_exception_handler(ThinkerException, thinker_exception_handler)
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
+
+logger.info("Exception handlers registered")
 
 # Include routers
 app.include_router(training.router, prefix="/api/training", tags=["training"])
@@ -96,15 +120,22 @@ async def health():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
+    logger.info(f"WebSocket client connected. Total connections: {len(manager.active_connections)}")
+
     try:
         while True:
             data = await websocket.receive_json()
+            logger.debug(f"WebSocket received: {data}")
             # Echo back for now - will handle training updates
             await manager.broadcast({
                 "type": "update",
                 "data": data
             })
     except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        logger.info(f"WebSocket client disconnected. Total connections: {len(manager.active_connections)}")
+    except Exception as e:
+        logger.error(f"WebSocket error: {str(e)}", exc_info=True)
         manager.disconnect(websocket)
 
 if __name__ == "__main__":

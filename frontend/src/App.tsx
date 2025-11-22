@@ -15,6 +15,7 @@ import {
 import { useStore } from './store/useStore'
 import SettingsModal from './components/SettingsModal'
 import AITrainingAssistant from './components/AITrainingAssistant'
+import ErrorBoundary from './components/ErrorBoundary'
 import TrainingDashboard from './views/TrainingDashboard'
 import ModelsLibrary from './views/ModelsLibrary'
 import DatasetManager from './views/DatasetManager'
@@ -50,7 +51,8 @@ function App() {
   const currentViewData = views.find(v => v.id === currentView)
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-obsidian-bg text-tactical-text-primary overflow-hidden">
+    <ErrorBoundary>
+      <div className="h-screen w-screen flex flex-col bg-obsidian-bg text-tactical-text-primary overflow-hidden">
       {/* Top Bar - Tactical Header */}
       <div className="h-11 bg-obsidian-surface/80 backdrop-blur-tactical border-b border-obsidian-border flex items-center justify-between px-4">
         <div className="flex items-center gap-3">
@@ -209,6 +211,7 @@ function App() {
         <SettingsModal onClose={() => setShowSettings(false)} />
       )}
     </div>
+    </ErrorBoundary>
   )
 }
 
