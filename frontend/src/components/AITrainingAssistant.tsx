@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, BookOpen, Loader2 } from 'lucide-react';
+import { Send, Sparkles, BookOpen, Loader2, Server } from 'lucide-react';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -12,6 +12,11 @@ interface AssistantResponse {
   actions?: Array<{ type: string; [key: string]: any }>;
 }
 
+interface OllamaModel {
+  name: string;
+  size: number;
+}
+
 interface AITrainingAssistantProps {
   onCreateJob?: (config: any) => void;
 }
@@ -20,12 +25,14 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'assistant',
-      content: "Hi! I'm your AI training assistant. I'm here to help you train custom models using the Tinker SDK.\n\nTo get started, tell me:\n1. What task do you want your model to perform?\n2. Do you have training data already?\n\nFor example: 'I want to train a model to review Python code' or 'I need help optimizing SQL queries'."
+      content: "Hi! I'm your AI training assistant for Thinker. I'm here to help you train custom models using the Tinker SDK.\n\n**What I can help with:**\n- Choosing the right training type (SL, RL, RLHF, DPO)\n- Configuring hyperparameters\n- Understanding the Thinker platform and its features\n- Troubleshooting training issues\n\nTo get started, tell me:\n1. What task do you want your model to perform?\n2. Do you have training data already?\n\nFor example: 'I want to train a model to review Python code' or 'Help me understand DPO training'."
     }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [suggestedConfig, setSuggestedConfig] = useState<any>(null);
+  const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
+  const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -35,6 +42,23 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Check Ollama availability on mount
+  useEffect(() => {
+    checkOllamaAvailability();
+  }, []);
+
+  const checkOllamaAvailability = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/assistant/models');
+      const data = await response.json();
+      setOllamaAvailable(data.available);
+      setAvailableModels(data.models || []);
+    } catch (error) {
+      console.error('Failed to check Ollama availability:', error);
+      setOllamaAvailable(false);
+    }
+  };
 
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
@@ -106,7 +130,7 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
   const quickPrompts = [
     "I want to train a code review model",
     "Help me understand DPO vs RLHF",
-    "My loss is increasing, what should I do?",
+    "What are the different views in Thinker?",
     "How should I format my dataset?"
   ];
 
@@ -118,9 +142,19 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
           <Sparkles className="w-5 h-5 text-purple-400" />
           <h2 className="text-lg font-semibold text-white">AI Training Assistant</h2>
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-400">
-          <BookOpen className="w-4 h-4" />
-          <span>Powered by Tinker SDK Knowledge</span>
+        <div className="flex items-center gap-3">
+          {ollamaAvailable !== null && (
+            <div className="flex items-center gap-2 text-xs">
+              <Server className={`w-4 h-4 ${ollamaAvailable ? 'text-green-400' : 'text-yellow-400'}`} />
+              <span className={ollamaAvailable ? 'text-green-400' : 'text-yellow-400'}>
+                {ollamaAvailable ? `Ollama (${availableModels.length} models)` : 'Ollama unavailable (using fallback)'}
+              </span>
+            </div>
+          )}
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <BookOpen className="w-4 h-4" />
+            <span>Tinker SDK</span>
+          </div>
         </div>
       </div>
 

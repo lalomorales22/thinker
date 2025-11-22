@@ -23,7 +23,7 @@ An IDE-like platform for training self-evolving AI agents. Build code review mod
 - 🔄 Real-time WebSocket training updates
 - 🧠 Multi-agent RL with tournament/collaborative/swarm modes
 - 📈 Recharts visualization ready
-- 🤖 AI Training Assistant with natural language interface
+- 🤖 AI Training Assistant powered by Ollama (local LLMs)
 - 💾 Persistent state management (Zustand)
 - 🔍 HuggingFace dataset search and import
 - ⚡ DPO (Direct Preference Optimization) training support
@@ -64,6 +64,7 @@ This script:
 - Python 3.10+
 - Node.js 18+
 - Tinker API key
+- (Optional) Ollama for AI Training Assistant - see [OLLAMA_SETUP.md](OLLAMA_SETUP.md)
 
 **Backend:**
 ```bash
@@ -94,7 +95,8 @@ npm run dev
 - **[BUILD.md](BUILD.md)** - Complete vision, technical roadmap & revolutionary features
 - **[HOW_TO_USE.md](HOW_TO_USE.md)** - Comprehensive user guide with training types, metrics glossary, and troubleshooting
 - **[TRAINING_GUIDE.md](TRAINING_GUIDE.md)** - Step-by-step training guide from zero to production model
-- **[HUGGINGFACE_IMPORT.md](HUGGINGFACE_IMPORT.md)** - 🆕 Git-clone style dataset importing from HuggingFace Hub
+- **[HUGGINGFACE_IMPORT.md](HUGGINGFACE_IMPORT.md)** - Git-clone style dataset importing from HuggingFace Hub
+- **[OLLAMA_SETUP.md](OLLAMA_SETUP.md)** - 🆕 Setup guide for AI Training Assistant with Ollama
 
 ## 🎯 Vision
 
@@ -133,7 +135,9 @@ See [BUILD.md](BUILD.md) for the complete roadmap of revolutionary features.
 - ✅ Dataset validator and previewer with format detection
 
 **✅ Phase 3 Complete: AI Assistant & Advanced Features**
-- ✅ Natural Language Training Assistant with Tinker SDK knowledge
+- ✅ Natural Language Training Assistant powered by Ollama (local LLMs)
+- ✅ AI assistant knows about Thinker platform and Tinker SDK
+- ✅ Automatic fallback to pattern matching when Ollama unavailable
 - ✅ HuggingFace dataset search, preview, and import
 - ✅ DPO (Direct Preference Optimization) training implementation
 - ✅ Multi-Agent RL Arena with tournament/collaborative/swarm modes
