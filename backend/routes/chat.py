@@ -36,8 +36,22 @@ async def chat_completion(request: ChatRequest, x_api_key: Optional[str] = Heade
     if api_key:
         os.environ["TINKER_API_KEY"] = api_key
 
-    # Initialize agent (in a real app, this might be a singleton or cached)
-    agent = CodeReviewAgent(base_model=request.model_name)
+    # Determine if model_name is a checkpoint path or base model
+    # If it starts with "tinker://", it's a checkpoint path
+    if request.model_name.startswith("tinker://"):
+        # Extract base model from saved models or use default
+        # For now, we'll need to find the base model from saved models
+        from .models import saved_models
+        saved_model = next((m for m in saved_models if m.get("checkpoint_path") == request.model_name), None)
+        base_model = saved_model["base_model"] if saved_model else "meta-llama/Llama-3.2-1B"
+        checkpoint_path = request.model_name
+    else:
+        # It's a base model name
+        base_model = request.model_name
+        checkpoint_path = None
+
+    # Initialize agent with appropriate model/checkpoint
+    agent = CodeReviewAgent(base_model=base_model, checkpoint_path=checkpoint_path)
     
     # Reuse the agent's sampling logic (we might want to expose a cleaner chat method on the agent later)
     # For now, we'll construct a prompt from messages
@@ -53,27 +67,31 @@ async def chat_completion(request: ChatRequest, x_api_key: Optional[str] = Heade
             tokenizer = client.tokenizer
             prompt = types.ModelInput.from_ints(tokenizer.encode(prompt_text))
             params = types.SamplingParams(max_tokens=request.max_tokens, temperature=request.temperature)
-            
+
             future = client.sample_async(prompt=prompt, sampling_params=params, num_samples=1)
             await future
             result = await future
-            
+
             output_tokens = result.samples[0].token_ids
             response_text = tokenizer.decode(output_tokens)
-            
+
             return ChatResponse(
                 response=response_text,
                 model=request.model_name,
                 tokens_used=len(output_tokens)
             )
         except Exception as e:
-            print(f"Chat completion failed: {e}")
-            
-    # Fallback
-    return ChatResponse(
-        response="Tinker SDK unavailable. This is a placeholder response.",
-        model=request.model_name,
-        tokens_used=0
+            error_msg = str(e)
+            print(f"Chat completion failed: {error_msg}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Model inference failed: {error_msg}. Please check your API key and model availability."
+            )
+
+    # If no client available
+    raise HTTPException(
+        status_code=503,
+        detail="Tinker SDK client unavailable. Please verify your API key is set correctly in settings."
     )
 
 @router.post("/review-code")
@@ -86,9 +104,19 @@ async def review_code(code: str, language: str = "python", model_name: str = "co
     if api_key:
         os.environ["TINKER_API_KEY"] = api_key
 
-    agent = CodeReviewAgent(base_model=model_name)
+    # Determine if model_name is a checkpoint path or base model
+    if model_name.startswith("tinker://"):
+        from .models import saved_models
+        saved_model = next((m for m in saved_models if m.get("checkpoint_path") == model_name), None)
+        base_model = saved_model["base_model"] if saved_model else "meta-llama/Llama-3.2-1B"
+        checkpoint_path = model_name
+    else:
+        base_model = model_name
+        checkpoint_path = None
+
+    agent = CodeReviewAgent(base_model=base_model, checkpoint_path=checkpoint_path)
     result = await agent.review_code(code, language)
-    
+
     return {
         "review": result["review"],
         "model": model_name

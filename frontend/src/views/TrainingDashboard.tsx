@@ -22,15 +22,38 @@ export default function TrainingDashboard() {
   const apiKey = useStore((state) => state.apiKey)
   const [jobs, setJobs] = useState<TrainingJob[]>([])
   const [showNewJobModal, setShowNewJobModal] = useState(false)
+  const [datasets, setDatasets] = useState<any[]>([])
 
   // Form State
   const [jobName, setJobName] = useState('')
   const [baseModel, setBaseModel] = useState('Qwen/Qwen3-30B-A3B-Base')
   const [trainingType, setTrainingType] = useState<'SL' | 'RL' | 'RLHF' | 'DPO'>('SL')
+  const [selectedDataset, setSelectedDataset] = useState('')
   const [learningRate, setLearningRate] = useState('1e-4')
   const [loraRank, setLoraRank] = useState('32')
   const [batchSize, setBatchSize] = useState('4')
   const [totalSteps, setTotalSteps] = useState('100')
+
+  // Fetch datasets on mount
+  useEffect(() => {
+    const fetchDatasets = async () => {
+      try {
+        const response = await fetch(`${backendUrl}/api/datasets/`, {
+          headers: {
+            'X-API-Key': apiKey
+          }
+        })
+        if (response.ok) {
+          const data = await response.json()
+          setDatasets(data.datasets || [])
+        }
+      } catch (error) {
+        console.error('Failed to fetch datasets:', error)
+      }
+    }
+
+    fetchDatasets()
+  }, [backendUrl, apiKey])
 
   // Fetch jobs on mount and poll
   useEffect(() => {
@@ -85,13 +108,15 @@ export default function TrainingDashboard() {
           learning_rate: parseFloat(learningRate),
           num_steps: parseInt(totalSteps),
           batch_size: parseInt(batchSize),
-          training_type: trainingType
+          training_type: trainingType,
+          dataset_id: selectedDataset || null
         })
       })
 
       if (response.ok) {
         setShowNewJobModal(false)
-        // Reset form?
+        // Reset form
+        setSelectedDataset('')
       } else {
         console.error('Failed to deploy job')
       }
@@ -458,6 +483,29 @@ export default function TrainingDashboard() {
                   <option value="meta-llama/Llama-3.1-8B">meta-llama/Llama-3.1-8B</option>
                   <option value="meta-llama/Llama-3.2-1B">meta-llama/Llama-3.2-1B</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-tactical-text-secondary uppercase tracking-wide mb-2">
+                  Training Dataset
+                </label>
+                <select
+                  className="input-field"
+                  value={selectedDataset}
+                  onChange={(e) => setSelectedDataset(e.target.value)}
+                >
+                  <option value="">No dataset (simulated training)</option>
+                  {datasets.map((dataset) => (
+                    <option key={dataset.id} value={dataset.id}>
+                      {dataset.name} ({dataset.numSamples} samples, {dataset.format})
+                    </option>
+                  ))}
+                </select>
+                {datasets.length === 0 && (
+                  <p className="text-xs text-tactical-text-muted mt-1">
+                    No datasets uploaded. Go to Dataset Manager to upload training data.
+                  </p>
+                )}
               </div>
 
               <div>
