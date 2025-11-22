@@ -40,9 +40,13 @@ export default function Playground() {
         })
         if (response.ok) {
           const data = await response.json()
-          setAvailableModels(data.models)
-          if (data.models.length > 0) {
-            setSelectedModel(data.models[0])
+          // Handle both string arrays and model objects with model_name property
+          const models = data.models.map((model: string | { model_name: string }) =>
+            typeof model === 'string' ? model : model.model_name
+          )
+          setAvailableModels(models)
+          if (models.length > 0) {
+            setSelectedModel(models[0])
           }
         }
       } catch (error) {
