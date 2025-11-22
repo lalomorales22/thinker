@@ -1,7 +1,8 @@
-import { Upload, Trash2, Eye, Database, Download } from 'lucide-react'
+import { Upload, Trash2, Eye, Database, Download, GitBranch } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
 import DatasetValidator from '../components/DatasetValidator'
+import HuggingFaceImporter from '../components/HuggingFaceImporter'
 
 interface Dataset {
   id: string
@@ -36,6 +37,7 @@ export default function DatasetManager() {
   const [testSplit, setTestSplit] = useState('5')
   const [showValidator, setShowValidator] = useState(false)
   const [isValidated, setIsValidated] = useState(false)
+  const [showHFImporter, setShowHFImporter] = useState(false)
 
   // Fetch datasets
   useEffect(() => {
@@ -141,13 +143,22 @@ export default function DatasetManager() {
             <Database className="w-5 h-5 text-brain-blue-500" />
             <span className="text-lg font-semibold">Dataset Manager</span>
           </div>
-          <button
-            className="btn btn-primary flex items-center gap-2"
-            onClick={() => setShowUploadModal(true)}
-          >
-            <Upload className="w-4 h-4" />
-            Upload Dataset
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className="btn btn-ghost flex items-center gap-2 border border-brain-blue-500/50 hover:bg-brain-blue-500/10"
+              onClick={() => setShowHFImporter(true)}
+            >
+              <GitBranch className="w-4 h-4" />
+              Import from HuggingFace
+            </button>
+            <button
+              className="btn btn-primary flex items-center gap-2"
+              onClick={() => setShowUploadModal(true)}
+            >
+              <Upload className="w-4 h-4" />
+              Upload Dataset
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar p-4">
@@ -497,6 +508,18 @@ export default function DatasetManager() {
           file={uploadFile}
           onValidationComplete={handleValidationComplete}
           onClose={() => setShowValidator(false)}
+        />
+      )}
+
+      {/* HuggingFace Importer */}
+      {showHFImporter && (
+        <HuggingFaceImporter
+          onImportComplete={(datasetId) => {
+            console.log('Dataset imported:', datasetId)
+            setShowHFImporter(false)
+            // Datasets list will refresh via polling
+          }}
+          onClose={() => setShowHFImporter(false)}
         />
       )}
     </div>
