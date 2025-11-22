@@ -248,14 +248,18 @@ def _get_mock_dataset_info(dataset_name: str):
 
     return mock_info[dataset_name]
 
+class SuggestMappingRequest(BaseModel):
+    dataset_name: str
+    training_type: str = "SL"
+
 @router.post("/suggest-mapping")
-async def suggest_field_mapping(dataset_name: str, training_type: str = "SL"):
+async def suggest_field_mapping(request: SuggestMappingRequest):
     """
     Suggest field mappings based on dataset structure and training type.
     """
     # Get dataset info to see available fields
     try:
-        info = await get_dataset_info(dataset_name)
+        info = await get_dataset_info(request.dataset_name)
     except:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
@@ -268,7 +272,7 @@ async def suggest_field_mapping(dataset_name: str, training_type: str = "SL"):
     chosen_fields = ["chosen", "winner", "preferred", "positive"]
     rejected_fields = ["rejected", "loser", "not_preferred", "negative"]
 
-    if training_type in ["DPO", "RLHF"]:
+    if request.training_type in ["DPO", "RLHF"]:
         # Need: prompt, chosen, rejected
         for field in features.keys():
             field_lower = field.lower()
@@ -289,16 +293,21 @@ async def suggest_field_mapping(dataset_name: str, training_type: str = "SL"):
 
     return {"suggestions": suggestions, "features": features}
 
-@router.post("/preview")
-async def preview_dataset(
-    dataset_name: str,
-    split: str = "train",
-    num_samples: int = 5,
+class PreviewRequest(BaseModel):
+    dataset_name: str
+    split: str = "train"
+    num_samples: int = 5
     field_mappings: Optional[List[Dict[str, str]]] = None
-):
+
+@router.post("/preview")
+async def preview_dataset(request: PreviewRequest):
     """
     Preview dataset with applied field mappings.
     """
+    dataset_name = request.dataset_name
+    split = request.split
+    num_samples = request.num_samples
+    field_mappings = request.field_mappings
     if not HUGGINGFACE_AVAILABLE:
         return _get_mock_preview(dataset_name, split, num_samples)
 

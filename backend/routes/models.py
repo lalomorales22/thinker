@@ -41,46 +41,79 @@ async def get_model(model_name: str):
 @router.get("/base/available")
 async def list_base_models(x_api_key: Optional[str] = Header(None)):
     """List available base models from Tinker"""
+    import os
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Comprehensive fallback list from Tinker API docs
+    fallback_models = [
+        # Qwen Models
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen3-30B-A3B-Instruct-2507",
+        "Qwen/Qwen3-30B-A3B",
+        "Qwen/Qwen3-30B-A3B-Base",
+        "Qwen/Qwen3-32B",
+        "Qwen/Qwen3-8B",
+        "Qwen/Qwen3-8B-Base",
+        "Qwen/Qwen3-4B-Instruct-2507",
+        "Qwen/Qwen2.5-72B-Instruct",
+        "Qwen/Qwen2.5-32B-Instruct",
+        "Qwen/Qwen2.5-14B-Instruct",
+        "Qwen/Qwen2.5-7B-Instruct",
+        "Qwen/Qwen2.5-3B-Instruct",
+        "Qwen/Qwen2.5-Coder-32B-Instruct",
+        "Qwen/Qwen2.5-Coder-14B-Instruct",
+        "Qwen/Qwen2.5-Coder-7B-Instruct",
+        # OpenAI Models
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        # DeepSeek Models
+        "deepseek-ai/DeepSeek-V3.1",
+        "deepseek-ai/DeepSeek-V3.1-Base",
+        "deepseek-ai/DeepSeek-V3",
+        "deepseek-ai/DeepSeek-R1",
+        # Meta Llama Models
+        "meta-llama/Llama-3.1-70B",
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "meta-llama/Llama-3.1-8B",
+        "meta-llama/Llama-3.1-8B-Instruct",
+        "meta-llama/Llama-3.2-3B",
+        "meta-llama/Llama-3.2-3B-Instruct",
+        "meta-llama/Llama-3.2-1B",
+        "meta-llama/Llama-3.2-1B-Instruct",
+        # Mistral Models
+        "mistralai/Mistral-7B-Instruct-v0.3",
+        "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "mistralai/Mixtral-8x22B-Instruct-v0.1",
+        # Google Models
+        "google/gemma-2-9b-it",
+        "google/gemma-2-27b-it",
+        # Other Models
+        "nvidia/Llama-3.1-Nemotron-70B-Instruct-HF",
+    ]
+
     try:
         import tinker
         # Check for API key from header or environment
-        import os
         api_key = x_api_key or os.getenv("TINKER_API_KEY")
         if not api_key:
-            raise ValueError("TINKER_API_KEY not set")
+            logger.warning("TINKER_API_KEY not set, using fallback models")
+            return {"models": fallback_models, "source": "fallback (API key not set)"}
 
         # Set API key for this request
         os.environ["TINKER_API_KEY"] = api_key
-            
+
         service_client = tinker.ServiceClient()
         # Use async version to avoid sync-from-async warnings
         capabilities = await service_client.get_server_capabilities_async()
         models = capabilities.supported_models
-        return {"models": models}
+        logger.info(f"Successfully fetched {len(models)} models from Tinker API")
+        return {"models": models, "source": "tinker_api"}
     except Exception as e:
-        print(f"Failed to fetch Tinker models: {e}")
-        # Fallback to hardcoded list
+        logger.error(f"Failed to fetch Tinker models: {e}")
+        # Always return fallback list
         return {
-            "models": [
-                "Qwen/Qwen3-235B-A22B-Instruct-2507",
-                "Qwen/Qwen3-30B-A3B-Instruct-2507",
-                "Qwen/Qwen3-30B-A3B",
-                "Qwen/Qwen3-30B-A3B-Base",
-                "Qwen/Qwen3-32B",
-                "Qwen/Qwen3-8B",
-                "Qwen/Qwen3-8B-Base",
-                "Qwen/Qwen3-4B-Instruct-2507",
-                "openai/gpt-oss-120b",
-                "openai/gpt-oss-20b",
-                "deepseek-ai/DeepSeek-V3.1",
-                "deepseek-ai/DeepSeek-V3.1-Base",
-                "meta-llama/Llama-3.1-70B",
-                "meta-llama/Llama-3.3-70B-Instruct",
-                "meta-llama/Llama-3.1-8B",
-                "meta-llama/Llama-3.1-8B-Instruct",
-                "meta-llama/Llama-3.2-3B",
-                "meta-llama/Llama-3.2-1B"
-            ],
+            "models": fallback_models,
             "source": "fallback (Tinker API unavailable)"
         }
 

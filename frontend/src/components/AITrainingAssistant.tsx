@@ -153,25 +153,34 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
             <div className="flex items-center gap-2 text-xs">
               <Server className={`w-4 h-4 ${ollamaAvailable ? 'text-green-400' : 'text-yellow-400'}`} />
               <span className={ollamaAvailable ? 'text-green-400' : 'text-yellow-400'}>
-                {ollamaAvailable ? `Ollama (${availableModels.length} models)` : 'Ollama unavailable (using fallback)'}
+                {ollamaAvailable ? `Ollama Connected` : 'Ollama Offline (Pattern Matching)'}
               </span>
             </div>
           )}
-          {ollamaAvailable && availableModels.length > 0 && (
-            <select
-              id="model-selector"
-              name="model"
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="px-3 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50"
-            >
-              {availableModels.map((model) => (
+          <select
+            id="model-selector"
+            name="model"
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            className="px-3 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+          >
+            {availableModels.length > 0 ? (
+              availableModels.map((model) => (
                 <option key={model.name} value={model.name}>
                   {model.name}
                 </option>
-              ))}
-            </select>
-          )}
+              ))
+            ) : (
+              <>
+                <option value="llama3.2">llama3.2 (recommended)</option>
+                <option value="llama3.1">llama3.1</option>
+                <option value="qwen2.5">qwen2.5</option>
+                <option value="mistral">mistral</option>
+                <option value="codellama">codellama</option>
+                <option value="gemma2">gemma2</option>
+              </>
+            )}
+          </select>
           <div className="flex items-center gap-2 text-xs text-gray-400">
             <BookOpen className="w-4 h-4" />
             <span>Tinker SDK</span>

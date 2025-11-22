@@ -89,6 +89,8 @@ export default function ModelsLibrary() {
           })
           if (baseResponse.ok) {
             const baseData = await baseResponse.json()
+            console.log('Base models response:', baseData)
+
             // Transform strings to Model objects
             const baseModels: Model[] = baseData.models
               .filter((item: any) => typeof item === 'string') // Only process strings
@@ -97,7 +99,7 @@ export default function ModelsLibrary() {
                 name: name.split('/').pop() || name,
                 baseModel: name,
                 type: 'base',
-                size: 'Unknown', // Could parse from name
+                size: 'Unknown',
                 checkpointPath: name,
                 trainingSteps: 0,
                 performance: {},
@@ -105,9 +107,13 @@ export default function ModelsLibrary() {
                 isFavorite: false
               }))
             allModels.push(...baseModels)
+            console.log(`Loaded ${baseModels.length} base models`)
+          } else {
+            console.error('Base models API returned error:', baseResponse.status)
           }
         } catch (error) {
           console.error('Failed to fetch base models:', error)
+          // Still set empty array so UI doesn't break
         }
 
         setModels(allModels)
