@@ -41,32 +41,61 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
   const [importProgress, setImportProgress] = useState(0);
   const [trainingType, setTrainingType] = useState<'SL' | 'DPO'>('SL');
   const [quickImportPath, setQuickImportPath] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const searchDatasets = async () => {
+    if (!searchQuery.trim()) return;
+
+    setIsLoading(true);
+    setError(null);
     try {
       const response = await fetch(`http://localhost:8000/api/huggingface/search?query=${searchQuery}&limit=10`);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Search failed' }));
+        throw new Error(errorData.detail || `Search failed with status ${response.status}`);
+      }
+
       const data = await response.json();
       setSearchResults(data.datasets || []);
     } catch (error) {
       console.error('Error searching datasets:', error);
+      setError(error instanceof Error ? error.message : 'Failed to search datasets. Please try again.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const selectDataset = async (dataset: DatasetSearchResult) => {
     setSelectedDataset(dataset);
+    setIsLoading(true);
+    setError(null);
     try {
       const response = await fetch(`http://localhost:8000/api/huggingface/info/${encodeURIComponent(dataset.name)}`);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Failed to fetch dataset info' }));
+        throw new Error(errorData.detail || `Failed to fetch dataset info with status ${response.status}`);
+      }
+
       const info = await response.json();
       setDatasetInfo(info);
       setSelectedSplit(info.splits[0] || 'train');
       setStep(2);
     } catch (error) {
       console.error('Error fetching dataset info:', error);
+      setError(error instanceof Error ? error.message : 'Failed to load dataset info. Please try again.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const quickImportDataset = async () => {
     if (!quickImportPath.trim()) return;
+
+    setIsLoading(true);
+    setError(null);
 
     try {
       // Create a dummy dataset result
@@ -80,13 +109,21 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
 
       setSelectedDataset(dataset);
       const response = await fetch(`http://localhost:8000/api/huggingface/info/${encodeURIComponent(quickImportPath.trim())}`);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Failed to load dataset' }));
+        throw new Error(errorData.detail || `Dataset not found or unavailable (status ${response.status})`);
+      }
+
       const info = await response.json();
       setDatasetInfo(info);
       setSelectedSplit(info.splits[0] || 'train');
       setStep(2); // Go to split selection
     } catch (error) {
       console.error('Error loading dataset:', error);
-      alert('Failed to load dataset. Please check the dataset path and try again.');
+      setError(error instanceof Error ? error.message : 'Failed to load dataset. Please check the dataset path and try again.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -177,6 +214,9 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
   };
 
   useEffect(() => {
+    // Reset error when changing steps
+    setError(null);
+
     if (step === 3) {
       suggestFieldMappings();
     } else if (step === 4) {
@@ -254,14 +294,31 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
                   />
                   <button
                     onClick={quickImportDataset}
-                    disabled={!quickImportPath.trim()}
+                    disabled={!quickImportPath.trim() || isLoading}
                     className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white rounded-lg transition-colors whitespace-nowrap flex items-center gap-2"
                   >
-                    <Download className="w-4 h-4" />
-                    Load
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Loading...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4" />
+                        Load
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
+
+              {/* Error Display */}
+              {error && (
+                <div className="p-3 bg-red-900/20 border border-red-500/30 rounded-lg flex items-start gap-2">
+                  <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+                  <span className="text-sm text-red-300">{error}</span>
+                </div>
+              )}
 
               {/* Or Divider */}
               <div className="flex items-center gap-3">
@@ -290,9 +347,20 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
                   </div>
                   <button
                     onClick={searchDatasets}
-                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors"
+                    disabled={isLoading || !searchQuery.trim()}
+                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2"
                   >
-                    Search
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Searching...
+                      </>
+                    ) : (
+                      <>
+                        <Search className="w-4 h-4" />
+                        Search
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
