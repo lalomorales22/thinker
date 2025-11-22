@@ -167,10 +167,44 @@ async def run_training_job(job_id: str, config: TrainingConfig):
                 "progress": (step + 1) / config.num_steps * 100
             }
             
+        # Save the trained model weights
+        try:
+            model_name = f"{config.training_type}_{job_id}"
+            print(f"Saving model weights as {model_name}...")
+
+            # Save weights and get sampling client
+            checkpoint_path = await training_client.save_weights_async(name=model_name)
+            print(f"Model saved to: {checkpoint_path}")
+
+            # Add to saved models list
+            from .models import saved_models
+            saved_model = {
+                "name": model_name,
+                "base_model": config.model_name,
+                "created_at": datetime.now().isoformat(),
+                "size_mb": 0.0,  # Size will be calculated if needed
+                "status": "ready",
+                "checkpoint_path": checkpoint_path,
+                "training_config": {
+                    "rank": config.rank,
+                    "learning_rate": config.learning_rate,
+                    "num_steps": config.num_steps,
+                    "training_type": config.training_type
+                },
+                "final_metrics": job["metrics"]
+            }
+            saved_models.append(saved_model)
+            print(f"Model {model_name} added to saved models")
+
+        except Exception as save_error:
+            print(f"Warning: Failed to save model weights: {save_error}")
+            # Don't fail the job if saving fails, just log it
+            job["metrics"]["save_warning"] = str(save_error)
+
         job["status"] = "completed"
         job["completed_at"] = datetime.now()
         print(f"Job {job_id} completed!")
-        
+
     except Exception as e:
         print(f"Training failed: {e}")
         job["status"] = "failed"
