@@ -22,9 +22,13 @@ interface Model {
 export default function ModelsLibrary() {
   const backendUrl = useStore((state) => state.backendUrl)
   const apiKey = useStore((state) => state.apiKey)
+  const setCurrentView = useStore((state) => state.setCurrentView)
+  const setSelectedPlaygroundModel = useStore((state) => state.setSelectedPlaygroundModel)
   const [models, setModels] = useState<Model[]>([])
   const [selectedModel, setSelectedModel] = useState<Model | null>(null)
   const [copiedPath, setCopiedPath] = useState<string | null>(null)
+  const [deletingModel, setDeletingModel] = useState<string | null>(null)
+  const [exportInfo, setExportInfo] = useState<string | null>(null)
 
   const getTypeColor = (type: string) => {
     switch (type) {
@@ -120,6 +124,68 @@ export default function ModelsLibrary() {
     ))
   }
 
+  // Test model in Playground
+  const handleTestInPlayground = (model: Model) => {
+    console.log('Test in Playground clicked for:', model.name)
+    // Set the checkpoint path as the selected model
+    setSelectedPlaygroundModel(model.checkpointPath)
+    // Navigate to playground
+    setCurrentView('playground')
+  }
+
+  // Export/Download model
+  const handleExportModel = (model: Model) => {
+    console.log('Export model clicked for:', model.name)
+    // Copy checkpoint path to clipboard and show notification
+    navigator.clipboard.writeText(model.checkpointPath)
+    setExportInfo(model.checkpointPath)
+    setTimeout(() => setExportInfo(null), 3000)
+  }
+
+  // Delete model
+  const handleDeleteModel = async (model: Model) => {
+    console.log('Delete model clicked for:', model.name)
+
+    // Don't allow deleting base models
+    if (model.type === 'base') {
+      console.log('Cannot delete base model')
+      return
+    }
+
+    // Confirm deletion
+    if (deletingModel === model.name) {
+      console.log('Confirming deletion of:', model.name)
+      try {
+        const response = await fetch(`${backendUrl}/api/models/${encodeURIComponent(model.name)}`, {
+          method: 'DELETE',
+          headers: {
+            'X-API-Key': apiKey
+          }
+        })
+
+        if (response.ok) {
+          console.log('Model deleted successfully')
+          // Remove from local state
+          setModels(models.filter(m => m.name !== model.name))
+          if (selectedModel?.name === model.name) {
+            setSelectedModel(null)
+          }
+          setDeletingModel(null)
+        } else {
+          console.error('Failed to delete model')
+        }
+      } catch (error) {
+        console.error('Error deleting model:', error)
+      }
+    } else {
+      // First click - set as deleting (requires confirmation)
+      console.log('Setting delete confirmation for:', model.name)
+      setDeletingModel(model.name)
+      // Reset after 3 seconds
+      setTimeout(() => setDeletingModel(null), 3000)
+    }
+  }
+
   return (
     <div className="h-full flex bg-dark-bg">
       {/* Models List */}
@@ -194,19 +260,33 @@ export default function ModelsLibrary() {
                       <button
                         className="btn btn-ghost btn-sm p-1.5"
                         title="Test in Playground"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleTestInPlayground(model)
+                        }}
                       >
                         <Play className="w-4 h-4" />
                       </button>
                       <button
                         className="btn btn-ghost btn-sm p-1.5"
-                        title="Download"
+                        title="Export Model (Copy Path)"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleExportModel(model)
+                        }}
                       >
                         <Download className="w-4 h-4" />
                       </button>
                       {model.type !== 'base' && (
                         <button
-                          className="btn btn-ghost btn-sm p-1.5 text-red-400"
-                          title="Delete"
+                          className={`btn btn-ghost btn-sm p-1.5 ${
+                            deletingModel === model.name ? 'text-red-600 bg-red-500/20' : 'text-red-400'
+                          }`}
+                          title={deletingModel === model.name ? 'Click again to confirm' : 'Delete'}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDeleteModel(model)
+                          }}
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -339,20 +419,51 @@ export default function ModelsLibrary() {
             )}
 
             <div className="pt-4 space-y-2">
-              <button className="btn btn-primary w-full flex items-center justify-center gap-2">
+              <button
+                className="btn btn-primary w-full flex items-center justify-center gap-2"
+                onClick={() => handleTestInPlayground(selectedModel)}
+              >
                 <Play className="w-4 h-4" />
                 Test in Playground
               </button>
-              <button className="btn btn-ghost w-full flex items-center justify-center gap-2">
+              <button
+                className="btn btn-ghost w-full flex items-center justify-center gap-2"
+                onClick={() => handleExportModel(selectedModel)}
+              >
                 <Download className="w-4 h-4" />
                 Export Model
               </button>
               {selectedModel.type !== 'base' && (
-                <button className="btn btn-ghost w-full flex items-center justify-center gap-2 text-red-400 hover:text-red-300">
+                <button
+                  className={`btn btn-ghost w-full flex items-center justify-center gap-2 ${
+                    deletingModel === selectedModel.name
+                      ? 'text-red-600 bg-red-500/20'
+                      : 'text-red-400 hover:text-red-300'
+                  }`}
+                  onClick={() => handleDeleteModel(selectedModel)}
+                >
                   <Trash2 className="w-4 h-4" />
-                  Delete Model
+                  {deletingModel === selectedModel.name ? 'Click to Confirm' : 'Delete Model'}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Export Notification */}
+      {exportInfo && (
+        <div className="fixed bottom-4 right-4 bg-dark-surface border border-brain-blue-500 rounded-ide p-4 shadow-lg max-w-md z-50">
+          <div className="flex items-start gap-3">
+            <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h4 className="font-semibold text-sm mb-1">Checkpoint Path Copied!</h4>
+              <p className="text-xs text-dark-text-secondary mb-2">
+                Use this path to load your model:
+              </p>
+              <code className="block text-xs bg-dark-hover p-2 rounded font-mono break-all">
+                {exportInfo}
+              </code>
             </div>
           </div>
         </div>

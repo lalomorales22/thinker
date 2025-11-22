@@ -18,6 +18,7 @@ interface Message {
 export default function Playground() {
   const backendUrl = useStore((state) => state.backendUrl)
   const apiKey = useStore((state) => state.apiKey)
+  const selectedPlaygroundModel = useStore((state) => state.selectedPlaygroundModel)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
@@ -33,6 +34,25 @@ export default function Playground() {
   useEffect(() => {
     const fetchModels = async () => {
       try {
+        const allModels: string[] = []
+
+        // Fetch trained models first
+        try {
+          const trainedResponse = await fetch(`${backendUrl}/api/models/`, {
+            headers: {
+              'X-API-Key': apiKey
+            }
+          })
+          if (trainedResponse.ok) {
+            const trainedData = await trainedResponse.json()
+            const trainedPaths = trainedData.models.map((model: any) => model.checkpoint_path || model.name)
+            allModels.push(...trainedPaths)
+          }
+        } catch (error) {
+          console.error('Failed to fetch trained models:', error)
+        }
+
+        // Fetch base models
         const response = await fetch(`${backendUrl}/api/models/base/available`, {
           headers: {
             'X-API-Key': apiKey
@@ -41,13 +61,15 @@ export default function Playground() {
         if (response.ok) {
           const data = await response.json()
           // Handle both string arrays and model objects with model_name property
-          const models = data.models.map((model: string | { model_name: string }) =>
+          const baseModels = data.models.map((model: string | { model_name: string }) =>
             typeof model === 'string' ? model : model.model_name
           )
-          setAvailableModels(models)
-          if (models.length > 0) {
-            setSelectedModel(models[0])
-          }
+          allModels.push(...baseModels)
+        }
+
+        setAvailableModels(allModels)
+        if (allModels.length > 0 && !selectedModel) {
+          setSelectedModel(allModels[0])
         }
       } catch (error) {
         console.error('Failed to fetch models:', error)
@@ -57,6 +79,13 @@ export default function Playground() {
     }
     fetchModels()
   }, [backendUrl, apiKey])
+
+  // Pre-select model from store if available
+  useEffect(() => {
+    if (selectedPlaygroundModel && availableModels.includes(selectedPlaygroundModel)) {
+      setSelectedModel(selectedPlaygroundModel)
+    }
+  }, [selectedPlaygroundModel, availableModels])
 
   // Auto-scroll to bottom
   useEffect(() => {

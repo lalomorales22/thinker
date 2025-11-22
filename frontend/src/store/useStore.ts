@@ -15,6 +15,8 @@ interface ThinkerStore {
   // Models
   models: any[]
   setModels: (models: any[]) => void
+  selectedPlaygroundModel: string
+  setSelectedPlaygroundModel: (model: string) => void
 
   // Datasets
   datasets: any[]
@@ -60,6 +62,8 @@ export const useStore = create<ThinkerStore>((set) => ({
   // Models
   models: [],
   setModels: (models) => set({ models }),
+  selectedPlaygroundModel: '',
+  setSelectedPlaygroundModel: (model) => set({ selectedPlaygroundModel: model }),
 
   // Datasets
   datasets: [],
