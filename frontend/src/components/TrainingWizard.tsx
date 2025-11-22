@@ -359,11 +359,36 @@ export default function TrainingWizard({ onClose, onComplete }: TrainingWizardPr
                     value={config.baseModel}
                     onChange={(e) => setConfig({...config, baseModel: e.target.value})}
                   >
-                    <option value="Qwen/Qwen3-8B-Base">Qwen3-8B (Good for code)</option>
-                    <option value="Qwen/Qwen3-30B-A3B-Base">Qwen3-30B (Most capable)</option>
-                    <option value="meta-llama/Llama-3.1-8B">Llama-3.1-8B</option>
-                    <option value="meta-llama/Llama-3.2-1B">Llama-3.2-1B (Fastest)</option>
+                    <optgroup label="🦖 Large Models (70B+)">
+                      <option value="Qwen/Qwen3-235B-A22B-Instruct-2507">Qwen3-235B Instruct (⚡ MoE)</option>
+                      <option value="deepseek-ai/DeepSeek-V3.1">DeepSeek-V3.1 (🤔 Hybrid MoE)</option>
+                      <option value="deepseek-ai/DeepSeek-V3.1-Base">DeepSeek-V3.1-Base (🐙 Base MoE)</option>
+                      <option value="meta-llama/Llama-3.1-70B">Llama-3.1-70B (🐙 Base Dense)</option>
+                      <option value="meta-llama/Llama-3.3-70B-Instruct">Llama-3.3-70B Instruct (⚡ Dense)</option>
+                    </optgroup>
+                    <optgroup label="🦅 Medium Models (30B-32B)">
+                      <option value="Qwen/Qwen3-30B-A3B-Instruct-2507">Qwen3-30B Instruct (⚡ MoE)</option>
+                      <option value="Qwen/Qwen3-30B-A3B">Qwen3-30B (🤔 Hybrid MoE)</option>
+                      <option value="Qwen/Qwen3-30B-A3B-Base">Qwen3-30B-Base (🐙 Base MoE)</option>
+                      <option value="Qwen/Qwen3-32B">Qwen3-32B (🤔 Hybrid Dense)</option>
+                      <option value="openai/gpt-oss-120b">GPT-OSS-120B (💭 Reasoning MoE)</option>
+                    </optgroup>
+                    <optgroup label="🦆 Small Models (8B)">
+                      <option value="Qwen/Qwen3-8B">Qwen3-8B (🤔 Hybrid Dense)</option>
+                      <option value="Qwen/Qwen3-8B-Base">Qwen3-8B-Base (🐙 Base Dense)</option>
+                      <option value="meta-llama/Llama-3.1-8B">Llama-3.1-8B (🐙 Base Dense)</option>
+                      <option value="meta-llama/Llama-3.1-8B-Instruct">Llama-3.1-8B Instruct (⚡ Dense)</option>
+                      <option value="openai/gpt-oss-20b">GPT-OSS-20B (💭 Reasoning MoE)</option>
+                    </optgroup>
+                    <optgroup label="🐣 Compact Models (1B-4B)">
+                      <option value="Qwen/Qwen3-4B-Instruct-2507">Qwen3-4B Instruct (⚡ Dense)</option>
+                      <option value="meta-llama/Llama-3.2-3B">Llama-3.2-3B (🐙 Base Dense)</option>
+                      <option value="meta-llama/Llama-3.2-1B">Llama-3.2-1B (🐙 Base Dense)</option>
+                    </optgroup>
                   </select>
+                  <p className="text-xs text-tactical-text-muted mt-1">
+                    🐙 Base | ⚡ Instruction | 💭 Reasoning | 🤔 Hybrid | MoE = Cost-effective
+                  </p>
                 </div>
 
                 <div>

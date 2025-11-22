@@ -2,6 +2,7 @@ import { Play, Pause, Trash2, Plus, Clock, Zap, TrendingUp, Server, Cpu, Activit
 import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
 import TrainingWizard from '../components/TrainingWizard'
+import { terminalLogger } from '../services/terminalLogger'
 
 interface TrainingJob {
   id: string
@@ -50,6 +51,7 @@ export default function TrainingDashboard() {
   useEffect(() => {
     const fetchDatasets = async () => {
       try {
+        terminalLogger.info('Fetching datasets...', 'datasets')
         const response = await fetch(`${backendUrl}/api/datasets/`, {
           headers: {
             'X-API-Key': apiKey
@@ -58,9 +60,12 @@ export default function TrainingDashboard() {
         if (response.ok) {
           const data = await response.json()
           setDatasets(data.datasets || [])
+          terminalLogger.success(`Loaded ${data.datasets?.length || 0} datasets`, 'datasets')
+        } else {
+          terminalLogger.error('Failed to fetch datasets', 'datasets')
         }
       } catch (error) {
-        console.error('Failed to fetch datasets:', error)
+        terminalLogger.error(`Error fetching datasets: ${error}`, 'datasets')
       }
     }
 
@@ -95,9 +100,15 @@ export default function TrainingDashboard() {
             createdAt: j.started_at || new Date().toISOString()
           }))
           setJobs(mappedJobs)
+
+          // Log active jobs
+          const activeJobs = mappedJobs.filter((j: any) => j.status === 'running')
+          if (activeJobs.length > 0) {
+            terminalLogger.debug(`${activeJobs.length} active training job(s)`, 'training')
+          }
         }
       } catch (error) {
-        console.error('Failed to fetch jobs:', error)
+        terminalLogger.error(`Failed to fetch jobs: ${error}`, 'training')
       }
     }
 
@@ -115,35 +126,43 @@ export default function TrainingDashboard() {
 
     // Show progress: "Initializing training client..."
     setDeployStatus('initializing')
+    terminalLogger.info('Initializing training client...', 'training')
     await new Promise(resolve => setTimeout(resolve, 800))
 
     // Show progress: "Loading model weights..."
     setDeployStatus('loading_model')
+    terminalLogger.info(`Loading model weights for ${baseModel}...`, 'training')
     await new Promise(resolve => setTimeout(resolve, 1000))
 
     // Show progress: "Preparing dataset..."
     setDeployStatus('loading_dataset')
+    terminalLogger.info('Preparing dataset...', 'training')
     await new Promise(resolve => setTimeout(resolve, 800))
 
     // Show progress: "Starting training..."
     setDeployStatus('starting')
+    terminalLogger.info('Starting training job...', 'training')
 
     try {
+      const config = {
+        model_name: baseModel,
+        rank: parseInt(loraRank),
+        learning_rate: parseFloat(learningRate),
+        num_steps: parseInt(totalSteps),
+        batch_size: parseInt(batchSize),
+        training_type: trainingType,
+        dataset_id: selectedDataset || null
+      }
+
+      terminalLogger.debug(`Training config: ${JSON.stringify(config, null, 2)}`, 'training')
+
       const response = await fetch(`${backendUrl}/api/training/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-API-Key': apiKey
         },
-        body: JSON.stringify({
-          model_name: baseModel,
-          rank: parseInt(loraRank),
-          learning_rate: parseFloat(learningRate),
-          num_steps: parseInt(totalSteps),
-          batch_size: parseInt(batchSize),
-          training_type: trainingType,
-          dataset_id: selectedDataset || null
-        })
+        body: JSON.stringify(config)
       })
 
       if (response.ok) {
@@ -152,15 +171,17 @@ export default function TrainingDashboard() {
         setShowNewJobModal(false)
         setDeployStatus('idle')
         setShowSuccessModal(true)
+        terminalLogger.success(`✅ Training job ${data.job_id} started successfully!`, 'training')
+        terminalLogger.info(`Model: ${baseModel} | Type: ${trainingType} | Steps: ${totalSteps}`, 'training')
         // Reset form
         setSelectedDataset('')
         setJobName('')
       } else {
-        console.error('Failed to deploy job')
+        terminalLogger.error('Failed to deploy job - API returned error', 'training')
         setDeployStatus('idle')
       }
     } catch (error) {
-      console.error('Error deploying job:', error)
+      terminalLogger.error(`❌ Error deploying job: ${error}`, 'training')
       setDeployStatus('idle')
     }
   }
@@ -184,6 +205,7 @@ export default function TrainingDashboard() {
 
   const handleDeleteJob = async (jobId: string) => {
     try {
+      terminalLogger.info(`Deleting job ${jobId}...`, 'training')
       const response = await fetch(`${backendUrl}/api/training/jobs/${jobId}`, {
         method: 'DELETE',
         headers: {
@@ -194,17 +216,18 @@ export default function TrainingDashboard() {
       if (response.ok) {
         // Refresh jobs list
         setJobs(jobs.filter(j => j.id !== jobId))
+        terminalLogger.success(`Job ${jobId} deleted`, 'training')
       } else {
-        console.error('Failed to delete job')
+        terminalLogger.error(`Failed to delete job ${jobId}`, 'training')
       }
     } catch (error) {
-      console.error('Error deleting job:', error)
+      terminalLogger.error(`Error deleting job ${jobId}: ${error}`, 'training')
     }
   }
 
   const handleToggleJob = async (jobId: string, currentStatus: string) => {
     // For now, this is a placeholder since pause/resume isn't fully implemented in backend
-    console.log(`Toggle job ${jobId} from ${currentStatus}`)
+    terminalLogger.info(`Toggle job ${jobId} from ${currentStatus}`, 'training')
     // TODO: Implement pause/resume API endpoint in backend
   }
 
@@ -687,11 +710,36 @@ export default function TrainingDashboard() {
                   value={baseModel}
                   onChange={(e) => setBaseModel(e.target.value)}
                 >
-                  <option value="Qwen/Qwen3-30B-A3B-Base">Qwen/Qwen3-30B-A3B-Base</option>
-                  <option value="Qwen/Qwen3-8B-Base">Qwen/Qwen3-8B-Base</option>
-                  <option value="meta-llama/Llama-3.1-8B">meta-llama/Llama-3.1-8B</option>
-                  <option value="meta-llama/Llama-3.2-1B">meta-llama/Llama-3.2-1B</option>
+                  <optgroup label="🦖 Large Models (70B+)">
+                    <option value="Qwen/Qwen3-235B-A22B-Instruct-2507">Qwen3-235B Instruct (⚡ MoE)</option>
+                    <option value="deepseek-ai/DeepSeek-V3.1">DeepSeek-V3.1 (🤔 Hybrid MoE)</option>
+                    <option value="deepseek-ai/DeepSeek-V3.1-Base">DeepSeek-V3.1-Base (🐙 Base MoE)</option>
+                    <option value="meta-llama/Llama-3.1-70B">Llama-3.1-70B (🐙 Base Dense)</option>
+                    <option value="meta-llama/Llama-3.3-70B-Instruct">Llama-3.3-70B Instruct (⚡ Dense)</option>
+                  </optgroup>
+                  <optgroup label="🦅 Medium Models (30B-32B)">
+                    <option value="Qwen/Qwen3-30B-A3B-Instruct-2507">Qwen3-30B Instruct (⚡ MoE)</option>
+                    <option value="Qwen/Qwen3-30B-A3B">Qwen3-30B (🤔 Hybrid MoE)</option>
+                    <option value="Qwen/Qwen3-30B-A3B-Base">Qwen3-30B-Base (🐙 Base MoE)</option>
+                    <option value="Qwen/Qwen3-32B">Qwen3-32B (🤔 Hybrid Dense)</option>
+                    <option value="openai/gpt-oss-120b">GPT-OSS-120B (💭 Reasoning MoE)</option>
+                  </optgroup>
+                  <optgroup label="🦆 Small Models (8B)">
+                    <option value="Qwen/Qwen3-8B">Qwen3-8B (🤔 Hybrid Dense)</option>
+                    <option value="Qwen/Qwen3-8B-Base">Qwen3-8B-Base (🐙 Base Dense)</option>
+                    <option value="meta-llama/Llama-3.1-8B">Llama-3.1-8B (🐙 Base Dense)</option>
+                    <option value="meta-llama/Llama-3.1-8B-Instruct">Llama-3.1-8B Instruct (⚡ Dense)</option>
+                    <option value="openai/gpt-oss-20b">GPT-OSS-20B (💭 Reasoning MoE)</option>
+                  </optgroup>
+                  <optgroup label="🐣 Compact Models (1B-4B)">
+                    <option value="Qwen/Qwen3-4B-Instruct-2507">Qwen3-4B Instruct (⚡ Dense)</option>
+                    <option value="meta-llama/Llama-3.2-3B">Llama-3.2-3B (🐙 Base Dense)</option>
+                    <option value="meta-llama/Llama-3.2-1B">Llama-3.2-1B (🐙 Base Dense)</option>
+                  </optgroup>
                 </select>
+                <p className="text-xs text-tactical-text-muted mt-1">
+                  🐙 Base | ⚡ Instruction | 💭 Reasoning | 🤔 Hybrid | MoE = Cost-effective
+                </p>
               </div>
 
               <div>
