@@ -1,6 +1,7 @@
 import { Upload, Trash2, Eye, Database, Download } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
+import DatasetValidator from '../components/DatasetValidator'
 
 interface Dataset {
   id: string
@@ -33,6 +34,8 @@ export default function DatasetManager() {
   const [trainSplit, setTrainSplit] = useState('80')
   const [valSplit, setValSplit] = useState('15')
   const [testSplit, setTestSplit] = useState('5')
+  const [showValidator, setShowValidator] = useState(false)
+  const [isValidated, setIsValidated] = useState(false)
 
   // Fetch datasets
   useEffect(() => {
@@ -61,11 +64,26 @@ export default function DatasetManager() {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setUploadFile(e.target.files[0])
+      setIsValidated(false)
       // Auto-detect format from extension
       const ext = e.target.files[0].name.split('.').pop()?.toUpperCase()
       if (['JSONL', 'JSON', 'CSV'].includes(ext || '')) {
         setFileFormat(ext as any)
       }
+    }
+  }
+
+  const handleValidate = () => {
+    if (uploadFile) {
+      setShowValidator(true)
+    }
+  }
+
+  const handleValidationComplete = (isValid: boolean, preview?: any) => {
+    setIsValidated(isValid)
+    if (isValid && preview) {
+      // Could store preview for later use
+      console.log('Dataset validated successfully', preview)
     }
   }
 
@@ -397,6 +415,21 @@ export default function DatasetManager() {
                     {uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : 'Supports JSONL, JSON, CSV (max 500MB)'}
                   </p>
                 </div>
+                {uploadFile && !isValidated && (
+                  <button
+                    className="btn btn-primary btn-sm mt-3 w-full flex items-center justify-center gap-2"
+                    onClick={handleValidate}
+                  >
+                    <Eye className="w-4 h-4" />
+                    Validate & Preview
+                  </button>
+                )}
+                {isValidated && (
+                  <div className="mt-3 p-2 rounded-tactical bg-led-green/10 border border-led-green/30 flex items-center gap-2">
+                    <Eye className="w-4 h-4 text-led-green" />
+                    <span className="text-sm text-led-green">Dataset validated successfully</span>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -448,7 +481,7 @@ export default function DatasetManager() {
               <button
                 className="btn btn-primary flex items-center gap-2"
                 onClick={handleUpload}
-                disabled={!uploadFile || !datasetName}
+                disabled={!uploadFile || !datasetName || !isValidated}
               >
                 <Upload className="w-4 h-4" />
                 Upload Dataset
@@ -456,6 +489,15 @@ export default function DatasetManager() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Dataset Validator */}
+      {showValidator && uploadFile && (
+        <DatasetValidator
+          file={uploadFile}
+          onValidationComplete={handleValidationComplete}
+          onClose={() => setShowValidator(false)}
+        />
       )}
     </div>
   )

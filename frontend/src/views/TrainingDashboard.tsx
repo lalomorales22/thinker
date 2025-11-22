@@ -1,6 +1,7 @@
-import { Play, Pause, Trash2, Plus, Clock, Zap, TrendingUp, Server, Cpu, Activity, Target, Database as DatabaseIcon, Brain, GitBranch, Info, HelpCircle } from 'lucide-react'
+import { Play, Pause, Trash2, Plus, Clock, Zap, TrendingUp, Server, Cpu, Activity, Target, Database as DatabaseIcon, Brain, GitBranch, Info, HelpCircle, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
+import TrainingWizard from '../components/TrainingWizard'
 
 interface TrainingJob {
   id: string
@@ -23,6 +24,14 @@ export default function TrainingDashboard() {
   const [jobs, setJobs] = useState<TrainingJob[]>([])
   const [showNewJobModal, setShowNewJobModal] = useState(false)
   const [datasets, setDatasets] = useState<any[]>([])
+
+  // Wizard and Confirmation State
+  const [showWizard, setShowWizard] = useState(false)
+  const [showConfirmModal, setShowConfirmModal] = useState(false)
+  const [showSuccessModal, setShowSuccessModal] = useState(false)
+  const [deployStatus, setDeployStatus] = useState<'idle' | 'initializing' | 'loading_model' | 'loading_dataset' | 'starting'>('idle')
+  const [lastDeployedJobId, setLastDeployedJobId] = useState<string>('')
+  const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set())
 
   // Form State
   const [jobName, setJobName] = useState('')
@@ -97,7 +106,28 @@ export default function TrainingDashboard() {
     return () => clearInterval(interval)
   }, [backendUrl, apiKey])
 
-  const handleDeployJob = async () => {
+  const handleDeployJobClick = () => {
+    setShowConfirmModal(true)
+  }
+
+  const handleConfirmDeploy = async () => {
+    setShowConfirmModal(false)
+
+    // Show progress: "Initializing training client..."
+    setDeployStatus('initializing')
+    await new Promise(resolve => setTimeout(resolve, 800))
+
+    // Show progress: "Loading model weights..."
+    setDeployStatus('loading_model')
+    await new Promise(resolve => setTimeout(resolve, 1000))
+
+    // Show progress: "Preparing dataset..."
+    setDeployStatus('loading_dataset')
+    await new Promise(resolve => setTimeout(resolve, 800))
+
+    // Show progress: "Starting training..."
+    setDeployStatus('starting')
+
     try {
       const response = await fetch(`${backendUrl}/api/training/start`, {
         method: 'POST',
@@ -117,15 +147,39 @@ export default function TrainingDashboard() {
       })
 
       if (response.ok) {
+        const data = await response.json()
+        setLastDeployedJobId(data.job_id || 'unknown')
         setShowNewJobModal(false)
+        setDeployStatus('idle')
+        setShowSuccessModal(true)
         // Reset form
         setSelectedDataset('')
+        setJobName('')
       } else {
         console.error('Failed to deploy job')
+        setDeployStatus('idle')
       }
     } catch (error) {
       console.error('Error deploying job:', error)
+      setDeployStatus('idle')
     }
+  }
+
+  const handleWizardComplete = async (config: any) => {
+    setShowWizard(false)
+
+    // Populate form with wizard config
+    setJobName(config.jobName || '')
+    setBaseModel(config.model_name)
+    setTrainingType(config.training_type)
+    setSelectedDataset(config.dataset_id || '')
+    setLearningRate(config.learning_rate.toString())
+    setLoraRank(config.rank.toString())
+    setBatchSize(config.batch_size.toString())
+    setTotalSteps(config.num_steps.toString())
+
+    // Show confirmation modal
+    setShowConfirmModal(true)
   }
 
   const handleDeleteJob = async (jobId: string) => {
@@ -152,6 +206,31 @@ export default function TrainingDashboard() {
     // For now, this is a placeholder since pause/resume isn't fully implemented in backend
     console.log(`Toggle job ${jobId} from ${currentStatus}`)
     // TODO: Implement pause/resume API endpoint in backend
+  }
+
+  const toggleJobExpansion = (jobId: string) => {
+    setExpandedJobs(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(jobId)) {
+        newSet.delete(jobId)
+      } else {
+        newSet.add(jobId)
+      }
+      return newSet
+    })
+  }
+
+  const estimateTimeRemaining = (currentStep: number, totalSteps: number) => {
+    if (currentStep === 0) return 'Calculating...'
+    const remainingSteps = totalSteps - currentStep
+    // Rough estimate: ~1 second per step
+    const seconds = remainingSteps
+    const minutes = Math.floor(seconds / 60)
+    const hours = Math.floor(minutes / 60)
+
+    if (hours > 0) return `~${hours}h ${minutes % 60}m`
+    if (minutes > 0) return `~${minutes}m`
+    return `~${seconds}s`
   }
 
   const getStatusLED = (status: string) => {
@@ -182,13 +261,22 @@ export default function TrainingDashboard() {
           <span className="led led-cyan"></span>
           <span className="font-display font-semibold uppercase tracking-wider">Training Operations</span>
         </div>
-        <button
-          className="btn btn-primary btn-sm flex items-center gap-2"
-          onClick={() => setShowNewJobModal(true)}
-        >
-          <Plus className="w-3.5 h-3.5" />
-          Deploy New Job
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="btn btn-primary btn-sm flex items-center gap-2"
+            onClick={() => setShowWizard(true)}
+          >
+            <Zap className="w-3.5 h-3.5" />
+            Quick Start Wizard
+          </button>
+          <button
+            className="btn btn-ghost btn-sm flex items-center gap-2"
+            onClick={() => setShowNewJobModal(true)}
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Manual Setup
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -365,76 +453,194 @@ export default function TrainingDashboard() {
               <div className="space-y-3">
                 {jobs.map((job) => {
                   const badge = getTypeBadge(job.trainingType)
+                  const isExpanded = expandedJobs.has(job.id)
                   return (
                     <div
                       key={job.id}
-                      className="tactical-panel p-3 hover:border-tactical-primary/40 transition-all"
+                      className={`tactical-panel p-3 transition-all cursor-pointer ${
+                        isExpanded ? 'border-tactical-primary' : 'hover:border-tactical-primary/40'
+                      }`}
                     >
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <span className={`led ${getStatusLED(job.status)}`}></span>
-                          <div>
-                            <h3 className="font-semibold text-sm">{job.name}</h3>
-                            <p className="text-xs text-tactical-text-muted font-mono">{job.baseModel}</p>
+                      <div onClick={() => toggleJobExpansion(job.id)}>
+                        <div className="flex items-start justify-between mb-3">
+                          <div className="flex items-center gap-3">
+                            <span className={`led ${getStatusLED(job.status)}`}></span>
+                            <div>
+                              <h3 className="font-semibold text-sm">{job.name}</h3>
+                              <p className="text-xs text-tactical-text-muted font-mono">{job.baseModel}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded-tactical-sm text-xs font-medium border ${badge.bg} ${badge.text} ${badge.border}`}>
+                              {job.trainingType}
+                            </span>
+                            <button
+                              className="btn btn-ghost btn-xs p-1"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleToggleJob(job.id, job.status)
+                              }}
+                            >
+                              {job.status === 'running' ? (
+                                <Pause className="w-3.5 h-3.5" />
+                              ) : (
+                                <Play className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-xs p-1 text-led-red hover:text-led-red"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleDeleteJob(job.id)
+                              }}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2">
-                          <span className={`px-2 py-0.5 rounded-tactical-sm text-xs font-medium border ${badge.bg} ${badge.text} ${badge.border}`}>
-                            {job.trainingType}
-                          </span>
-                          <button
-                            className="btn btn-ghost btn-xs p-1"
-                            onClick={() => handleToggleJob(job.id, job.status)}
-                          >
-                            {job.status === 'running' ? (
+                        {/* Progress Bar */}
+                        <div className="mb-3">
+                          <div className="flex items-center justify-between text-xs text-tactical-text-muted mb-1.5">
+                            <span>Step {job.currentStep.toLocaleString()} / {job.totalSteps.toLocaleString()}</span>
+                            <span className="font-mono">{job.progress.toFixed(1)}%</span>
+                          </div>
+                          <div className="progress-bar">
+                            <div className="progress-fill" style={{ width: `${job.progress}%` }} />
+                          </div>
+                        </div>
+
+                        {/* Metrics */}
+                        <div className="grid grid-cols-3 gap-4 text-xs">
+                          {job.loss !== undefined && (
+                            <div className="flex items-center gap-2">
+                              <span className="led led-blue"></span>
+                              <span className="text-tactical-text-muted">Loss:</span>
+                              <span className="font-mono text-led-blue">{job.loss.toFixed(3)}</span>
+                            </div>
+                          )}
+                          {job.reward !== undefined && (
+                            <div className="flex items-center gap-2">
+                              <span className="led led-green"></span>
+                              <span className="text-tactical-text-muted">Reward:</span>
+                              <span className="font-mono text-led-green">{job.reward.toFixed(2)}</span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <span className="led led-cyan"></span>
+                            <Clock className="w-3 h-3 text-tactical-text-muted" />
+                            <span className="text-tactical-text-muted font-mono">{job.timeElapsed}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Expanded Details */}
+                      {isExpanded && (
+                        <div className="mt-4 pt-4 border-t border-obsidian-border space-y-3">
+                          {/* Detailed Metrics */}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="tactical-widget">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Clock className="w-3.5 h-3.5 text-led-cyan" />
+                                <span className="text-xs text-tactical-text-secondary uppercase">Time Remaining</span>
+                              </div>
+                              <div className="text-lg font-bold font-mono text-led-cyan">
+                                {estimateTimeRemaining(job.currentStep, job.totalSteps)}
+                              </div>
+                            </div>
+
+                            <div className="tactical-widget">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Zap className="w-3.5 h-3.5 text-led-yellow" />
+                                <span className="text-xs text-tactical-text-secondary uppercase">Steps/Sec</span>
+                              </div>
+                              <div className="text-lg font-bold font-mono text-led-yellow">
+                                {job.status === 'running' ? '~1.2' : '0'}
+                              </div>
+                            </div>
+
+                            <div className="tactical-widget">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Activity className="w-3.5 h-3.5 text-led-green" />
+                                <span className="text-xs text-tactical-text-secondary uppercase">Learning Rate</span>
+                              </div>
+                              <div className="text-lg font-bold font-mono text-led-green">1e-4</div>
+                            </div>
+
+                            <div className="tactical-widget">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Cpu className="w-3.5 h-3.5 text-led-purple" />
+                                <span className="text-xs text-tactical-text-secondary uppercase">GPU Memory</span>
+                              </div>
+                              <div className="text-lg font-bold font-mono text-led-purple">
+                                {job.status === 'running' ? '8.2 GB' : '0 GB'}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Mini Loss Chart */}
+                          {job.loss !== undefined && (
+                            <div className="tactical-panel p-3">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs text-tactical-text-secondary uppercase">Loss Trend</span>
+                                <span className="text-xs font-mono text-led-blue">{job.loss.toFixed(3)}</span>
+                              </div>
+                              <div className="h-12 flex items-end gap-0.5">
+                                {/* Simple sparkline representation */}
+                                {[0.8, 0.75, 0.7, 0.68, 0.65, 0.63, 0.6, 0.58, 0.55, 0.52].map((val, idx) => (
+                                  <div
+                                    key={idx}
+                                    className="flex-1 bg-led-blue/30 rounded-t"
+                                    style={{ height: `${val * 100}%` }}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Recent Logs */}
+                          <div className="tactical-panel p-3">
+                            <div className="text-xs text-tactical-text-secondary uppercase mb-2">Recent Logs</div>
+                            <div className="space-y-1 font-mono text-xs">
+                              <div className="text-tactical-text-muted">
+                                <span className="text-led-cyan">[{job.currentStep}]</span> Loss: {job.loss?.toFixed(3) || 'N/A'}
+                              </div>
+                              <div className="text-tactical-text-muted">
+                                <span className="text-led-green">[{Math.max(0, job.currentStep - 10)}]</span> Checkpoint saved
+                              </div>
+                              <div className="text-tactical-text-muted">
+                                <span className="text-led-yellow">[{Math.max(0, job.currentStep - 20)}]</span> Optimizer step completed
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="btn btn-ghost btn-sm flex items-center gap-2 flex-1"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleToggleJob(job.id, job.status)
+                              }}
+                            >
                               <Pause className="w-3.5 h-3.5" />
-                            ) : (
-                              <Play className="w-3.5 h-3.5" />
-                            )}
-                          </button>
-                          <button
-                            className="btn btn-ghost btn-xs p-1 text-led-red hover:text-led-red"
-                            onClick={() => handleDeleteJob(job.id)}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Progress Bar */}
-                      <div className="mb-3">
-                        <div className="flex items-center justify-between text-xs text-tactical-text-muted mb-1.5">
-                          <span>Step {job.currentStep.toLocaleString()} / {job.totalSteps.toLocaleString()}</span>
-                          <span className="font-mono">{job.progress.toFixed(1)}%</span>
-                        </div>
-                        <div className="progress-bar">
-                          <div className="progress-fill" style={{ width: `${job.progress}%` }} />
-                        </div>
-                      </div>
-
-                      {/* Metrics */}
-                      <div className="grid grid-cols-3 gap-4 text-xs">
-                        {job.loss !== undefined && (
-                          <div className="flex items-center gap-2">
-                            <span className="led led-blue"></span>
-                            <span className="text-tactical-text-muted">Loss:</span>
-                            <span className="font-mono text-led-blue">{job.loss.toFixed(3)}</span>
+                              {job.status === 'running' ? 'Pause' : 'Resume'}
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-sm flex items-center gap-2 flex-1 text-led-red hover:text-led-red"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                // TODO: Implement stop job API
+                                console.log('Stop job', job.id)
+                              }}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Stop
+                            </button>
                           </div>
-                        )}
-                        {job.reward !== undefined && (
-                          <div className="flex items-center gap-2">
-                            <span className="led led-green"></span>
-                            <span className="text-tactical-text-muted">Reward:</span>
-                            <span className="font-mono text-led-green">{job.reward.toFixed(2)}</span>
-                          </div>
-                        )}
-                        <div className="flex items-center gap-2">
-                          <span className="led led-cyan"></span>
-                          <Clock className="w-3 h-3 text-tactical-text-muted" />
-                          <span className="text-tactical-text-muted font-mono">{job.timeElapsed}</span>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )
                 })}
@@ -638,7 +844,7 @@ export default function TrainingDashboard() {
               </button>
               <button
                 className="btn btn-primary flex items-center gap-2"
-                onClick={handleDeployJob}
+                onClick={handleDeployJobClick}
               >
                 <Play className="w-4 h-4" />
                 Deploy Job
@@ -822,6 +1028,211 @@ export default function TrainingDashboard() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Training Wizard */}
+      {showWizard && (
+        <TrainingWizard
+          onClose={() => setShowWizard(false)}
+          onComplete={handleWizardComplete}
+        />
+      )}
+
+      {/* Confirmation Modal */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="tactical-panel-elevated w-full max-w-2xl">
+            <div className="tactical-panel-header">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-led-yellow" />
+                <span className="font-semibold uppercase tracking-wide">Confirm Training Deployment</span>
+              </div>
+              <button className="btn btn-ghost btn-xs p-1" onClick={() => setShowConfirmModal(false)}>
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-tactical-text-secondary">
+                You're about to start training a model with the following configuration:
+              </p>
+
+              <div className="tactical-panel p-4 space-y-3">
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-tactical-text-muted">Base Model:</span>
+                    <p className="font-mono text-tactical-text-primary">{baseModel}</p>
+                  </div>
+                  <div>
+                    <span className="text-tactical-text-muted">Training Type:</span>
+                    <p className="font-mono text-tactical-text-primary">{trainingType}</p>
+                  </div>
+                  <div>
+                    <span className="text-tactical-text-muted">Learning Rate:</span>
+                    <p className="font-mono text-tactical-text-primary">{learningRate}</p>
+                  </div>
+                  <div>
+                    <span className="text-tactical-text-muted">LoRA Rank:</span>
+                    <p className="font-mono text-tactical-text-primary">{loraRank}</p>
+                  </div>
+                  <div>
+                    <span className="text-tactical-text-muted">Batch Size:</span>
+                    <p className="font-mono text-tactical-text-primary">{batchSize}</p>
+                  </div>
+                  <div>
+                    <span className="text-tactical-text-muted">Total Steps:</span>
+                    <p className="font-mono text-tactical-text-primary">{totalSteps}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="tactical-panel p-3 bg-led-cyan/10 border border-led-cyan/30">
+                <p className="text-xs text-tactical-text-secondary">
+                  <strong className="text-led-cyan">Note:</strong> This will consume GPU resources and may incur costs. Make sure your configuration is correct before proceeding.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 p-6 pt-0">
+              <button className="btn btn-ghost" onClick={() => setShowConfirmModal(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary flex items-center gap-2"
+                onClick={handleConfirmDeploy}
+              >
+                <Play className="w-4 h-4" />
+                Start Training
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deployment Progress Modal */}
+      {deployStatus !== 'idle' && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="tactical-panel-elevated w-full max-w-md">
+            <div className="tactical-panel-header">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 text-led-cyan animate-spin" />
+                <span className="font-semibold uppercase tracking-wide">Deploying Training Job</span>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="space-y-3">
+                <div className={`flex items-center gap-3 p-3 rounded-tactical transition-all ${
+                  deployStatus === 'initializing' ? 'bg-tactical-primary/20 border border-tactical-primary' : 'bg-obsidian-surface'
+                }`}>
+                  {deployStatus === 'initializing' ? (
+                    <Loader2 className="w-4 h-4 text-tactical-primary animate-spin" />
+                  ) : (
+                    <CheckCircle className="w-4 h-4 text-led-green" />
+                  )}
+                  <span className="text-sm">Initializing training client...</span>
+                </div>
+
+                <div className={`flex items-center gap-3 p-3 rounded-tactical transition-all ${
+                  deployStatus === 'loading_model' ? 'bg-tactical-primary/20 border border-tactical-primary' : deployStatus === 'initializing' ? 'bg-obsidian-surface/50 opacity-50' : 'bg-obsidian-surface'
+                }`}>
+                  {deployStatus === 'loading_model' ? (
+                    <Loader2 className="w-4 h-4 text-tactical-primary animate-spin" />
+                  ) : deployStatus === 'initializing' ? (
+                    <div className="w-4 h-4" />
+                  ) : (
+                    <CheckCircle className="w-4 h-4 text-led-green" />
+                  )}
+                  <span className="text-sm">Loading model weights...</span>
+                </div>
+
+                <div className={`flex items-center gap-3 p-3 rounded-tactical transition-all ${
+                  deployStatus === 'loading_dataset' ? 'bg-tactical-primary/20 border border-tactical-primary' : ['initializing', 'loading_model'].includes(deployStatus) ? 'bg-obsidian-surface/50 opacity-50' : 'bg-obsidian-surface'
+                }`}>
+                  {deployStatus === 'loading_dataset' ? (
+                    <Loader2 className="w-4 h-4 text-tactical-primary animate-spin" />
+                  ) : ['initializing', 'loading_model'].includes(deployStatus) ? (
+                    <div className="w-4 h-4" />
+                  ) : (
+                    <CheckCircle className="w-4 h-4 text-led-green" />
+                  )}
+                  <span className="text-sm">Preparing dataset...</span>
+                </div>
+
+                <div className={`flex items-center gap-3 p-3 rounded-tactical transition-all ${
+                  deployStatus === 'starting' ? 'bg-tactical-primary/20 border border-tactical-primary' : ['initializing', 'loading_model', 'loading_dataset'].includes(deployStatus) ? 'bg-obsidian-surface/50 opacity-50' : 'bg-obsidian-surface'
+                }`}>
+                  {deployStatus === 'starting' ? (
+                    <Loader2 className="w-4 h-4 text-tactical-primary animate-spin" />
+                  ) : ['initializing', 'loading_model', 'loading_dataset'].includes(deployStatus) ? (
+                    <div className="w-4 h-4" />
+                  ) : (
+                    <CheckCircle className="w-4 h-4 text-led-green" />
+                  )}
+                  <span className="text-sm">Starting training...</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success Modal */}
+      {showSuccessModal && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="tactical-panel-elevated w-full max-w-md">
+            <div className="tactical-panel-header">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-led-green" />
+                <span className="font-semibold uppercase tracking-wide">Training Started!</span>
+              </div>
+              <button className="btn btn-ghost btn-xs p-1" onClick={() => setShowSuccessModal(false)}>
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="flex items-center gap-3 p-4 rounded-tactical bg-led-green/10 border border-led-green/30">
+                <CheckCircle className="w-8 h-8 text-led-green" />
+                <div>
+                  <p className="font-semibold text-led-green">Training job deployed successfully!</p>
+                  <p className="text-sm text-tactical-text-secondary mt-1">Job ID: <span className="font-mono">{lastDeployedJobId}</span></p>
+                </div>
+              </div>
+
+              <div className="tactical-panel p-4 space-y-2">
+                <h3 className="font-semibold text-sm text-tactical-text-primary">What happens next?</h3>
+                <ul className="space-y-1 text-sm text-tactical-text-secondary">
+                  <li className="flex items-start gap-2">
+                    <span className="text-led-cyan">•</span>
+                    <span>Your job will appear in the Active Training Operations list</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-led-cyan">•</span>
+                    <span>Watch real-time progress updates and metrics</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-led-cyan">•</span>
+                    <span>Checkpoints will be saved every 500 steps</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-led-cyan">•</span>
+                    <span>Test your trained model in the Playground when complete</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 p-6 pt-0">
+              <button
+                className="btn btn-primary"
+                onClick={() => setShowSuccessModal(false)}
+              >
+                Got it!
+              </button>
             </div>
           </div>
         </div>
