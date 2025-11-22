@@ -125,8 +125,8 @@ export default function ModelsLibrary() {
   }
 
   // Test model in Playground
-  const handleTestInPlayground = (model: Model, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleTestInPlayground = (model: Model) => {
+    console.log('Test in Playground clicked for:', model.name)
     // Set the checkpoint path as the selected model
     setSelectedPlaygroundModel(model.checkpointPath)
     // Navigate to playground
@@ -134,8 +134,8 @@ export default function ModelsLibrary() {
   }
 
   // Export/Download model
-  const handleExportModel = (model: Model, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleExportModel = (model: Model) => {
+    console.log('Export model clicked for:', model.name)
     // Copy checkpoint path to clipboard and show notification
     navigator.clipboard.writeText(model.checkpointPath)
     setExportInfo(model.checkpointPath)
@@ -143,16 +143,18 @@ export default function ModelsLibrary() {
   }
 
   // Delete model
-  const handleDeleteModel = async (model: Model, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleDeleteModel = async (model: Model) => {
+    console.log('Delete model clicked for:', model.name)
 
     // Don't allow deleting base models
     if (model.type === 'base') {
+      console.log('Cannot delete base model')
       return
     }
 
     // Confirm deletion
     if (deletingModel === model.name) {
+      console.log('Confirming deletion of:', model.name)
       try {
         const response = await fetch(`${backendUrl}/api/models/${encodeURIComponent(model.name)}`, {
           method: 'DELETE',
@@ -162,6 +164,7 @@ export default function ModelsLibrary() {
         })
 
         if (response.ok) {
+          console.log('Model deleted successfully')
           // Remove from local state
           setModels(models.filter(m => m.name !== model.name))
           if (selectedModel?.name === model.name) {
@@ -176,6 +179,7 @@ export default function ModelsLibrary() {
       }
     } else {
       // First click - set as deleting (requires confirmation)
+      console.log('Setting delete confirmation for:', model.name)
       setDeletingModel(model.name)
       // Reset after 3 seconds
       setTimeout(() => setDeletingModel(null), 3000)
@@ -256,14 +260,20 @@ export default function ModelsLibrary() {
                       <button
                         className="btn btn-ghost btn-sm p-1.5"
                         title="Test in Playground"
-                        onClick={(e) => handleTestInPlayground(model, e)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleTestInPlayground(model)
+                        }}
                       >
                         <Play className="w-4 h-4" />
                       </button>
                       <button
                         className="btn btn-ghost btn-sm p-1.5"
                         title="Export Model (Copy Path)"
-                        onClick={(e) => handleExportModel(model, e)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleExportModel(model)
+                        }}
                       >
                         <Download className="w-4 h-4" />
                       </button>
@@ -273,7 +283,10 @@ export default function ModelsLibrary() {
                             deletingModel === model.name ? 'text-red-600 bg-red-500/20' : 'text-red-400'
                           }`}
                           title={deletingModel === model.name ? 'Click again to confirm' : 'Delete'}
-                          onClick={(e) => handleDeleteModel(model, e)}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDeleteModel(model)
+                          }}
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -408,14 +421,14 @@ export default function ModelsLibrary() {
             <div className="pt-4 space-y-2">
               <button
                 className="btn btn-primary w-full flex items-center justify-center gap-2"
-                onClick={(e) => handleTestInPlayground(selectedModel, e)}
+                onClick={() => handleTestInPlayground(selectedModel)}
               >
                 <Play className="w-4 h-4" />
                 Test in Playground
               </button>
               <button
                 className="btn btn-ghost w-full flex items-center justify-center gap-2"
-                onClick={(e) => handleExportModel(selectedModel, e)}
+                onClick={() => handleExportModel(selectedModel)}
               >
                 <Download className="w-4 h-4" />
                 Export Model
@@ -427,7 +440,7 @@ export default function ModelsLibrary() {
                       ? 'text-red-600 bg-red-500/20'
                       : 'text-red-400 hover:text-red-300'
                   }`}
-                  onClick={(e) => handleDeleteModel(selectedModel, e)}
+                  onClick={() => handleDeleteModel(selectedModel)}
                 >
                   <Trash2 className="w-4 h-4" />
                   {deletingModel === selectedModel.name ? 'Click to Confirm' : 'Delete Model'}
