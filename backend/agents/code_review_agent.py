@@ -51,16 +51,21 @@ class CodeReviewAgent:
             pass
 
     async def _get_sampling_client(self):
-        """Lazy load sampling client"""
+        """
+        Lazy load both training client (for tokenizer) and sampling client (for inference).
+        Per Tinker docs: TokeniTrainingClient has get_tokenizer(), SamplingClient doesn't.
+        So we always create TrainingClient first, then get SamplingClient from it.
+        """
         self._ensure_client()
         if not self.sampling_client and self.service_client:
             try:
-                # Create training client with base model
+                # Always create TrainingClient first - it provides get_tokenizer()
+                print(f"Creating training client for: {self.base_model}")
                 self.training_client = await self.service_client.create_lora_training_client_async(
                     base_model=self.base_model,
                     rank=32  # Default rank
                 )
-
+                
                 # If checkpoint path is provided, load the fine-tuned weights
                 if self.checkpoint_path and self.checkpoint_path.startswith("tinker://"):
                     print(f"Loading checkpoint: {self.checkpoint_path}")
@@ -69,12 +74,25 @@ class CodeReviewAgent:
                         print(f"Successfully loaded checkpoint: {self.checkpoint_path}")
                     except Exception as load_error:
                         print(f"Warning: Failed to load checkpoint {self.checkpoint_path}: {load_error}")
-                        print("Continuing with base model instead")
-
-                self.sampling_client = self.training_client  # TrainingClient supports sample()
+                        print("Continuing with base model weights")
+                
+                # Create sampling client from training client
+                # This is the proper way per Tinker docs - save_weights_and_get_sampling_client
+                print(f"Creating sampling client...")
+                self.sampling_client = await self.training_client.save_weights_and_get_sampling_client_async(
+                    name="inference_session"
+                )
+                print(f"Sampling client ready")
+                
             except Exception as e:
-                print(f"Error creating sampling client: {e}")
+                print(f"Error creating clients: {e}")
         return self.sampling_client
+    
+    def get_tokenizer(self):
+        """Get tokenizer from the training client"""
+        if self.training_client:
+            return self.training_client.get_tokenizer()
+        return None
 
     async def review_code(self, code: str, language: str = "python") -> Dict[str, Any]:
         """
@@ -86,27 +104,20 @@ class CodeReviewAgent:
             try:
                 prompt_text = f"Review the following {language} code and provide issues and suggestions in JSON format:\n\n```{language}\n{code}\n```"
                 
-                # Create ModelInput
-                # Note: In a real app we need a tokenizer. The docs say "use the training client's tokenizer".
-                # We'll assume the client handles text-to-token or we need to fetch the tokenizer.
-                # The docs example: prompt = types.ModelInput.from_ints(tokenizer.encode(...))
-                # But wait, does the SDK support raw text? 
-                # "You can use the training client’s tokenizer..."
-                tokenizer = client.tokenizer
+                # Get tokenizer from training client (SamplingClient doesn't have get_tokenizer)
+                tokenizer = self.get_tokenizer()
+                if not tokenizer:
+                    raise Exception("Tokenizer not available")
                 prompt = types.ModelInput.from_ints(tokenizer.encode(prompt_text))
                 
                 params = types.SamplingParams(max_tokens=1024, temperature=0.2)
                 
-                # Async call
-                future = client.sample_async(prompt=prompt, sampling_params=params, num_samples=1)
-                # In async context we await twice as per docs
-                await future # Queue request
-                result = await future # Get result
+                # Use the sync sample() method which returns a future
+                future = client.sample(prompt=prompt, sampling_params=params, num_samples=1)
+                result = future.result()
                 
-                # Parse result
-                # result is likely a list of samples. We take the first.
-                # We need to decode tokens back to text.
-                output_tokens = result.samples[0].token_ids
+                # Parse result - structure is result.sequences[0].tokens per Tinker docs
+                output_tokens = result.sequences[0].tokens
                 response_text = tokenizer.decode(output_tokens)
                 
                 # Attempt to parse JSON from response

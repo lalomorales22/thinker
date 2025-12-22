@@ -104,7 +104,7 @@ export default function MultiAgentArena() {
                 <input
                   type="number"
                   value={numAgents}
-                  onChange={(e) => setNumAgents(parseInt(e.target.value))}
+                  onChange={(e) => setNumAgents(parseInt(e.target.value) || 2)}
                   min={2}
                   max={10}
                   className="w-full px-3 py-2 bg-obsidian-elevated border border-obsidian-border rounded-tactical text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50"
@@ -131,7 +131,7 @@ export default function MultiAgentArena() {
                 <input
                   type="number"
                   value={numRounds}
-                  onChange={(e) => setNumRounds(parseInt(e.target.value))}
+                  onChange={(e) => setNumRounds(parseInt(e.target.value) || 1)}
                   min={1}
                   max={10}
                   className="w-full px-3 py-2 bg-obsidian-elevated border border-obsidian-border rounded-tactical text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50"

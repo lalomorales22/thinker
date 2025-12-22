@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, BookOpen, Loader2, Server } from 'lucide-react';
+import { Send, Sparkles, Loader2, Server } from 'lucide-react';
 import { useStore } from '../store/useStore';
 
 interface ChatMessage {
@@ -145,17 +145,17 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
   return (
     <div className="flex flex-col h-full bg-[#0a0a0f] rounded-lg border border-gray-800">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-800">
+      <div className="flex flex-col gap-2 p-4 border-b border-gray-800">
         <div className="flex items-center gap-2">
           <Sparkles className="w-5 h-5 text-purple-400" />
           <h2 className="text-lg font-semibold text-white">AI Training Assistant</h2>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           {ollamaAvailable !== null && (
             <div className="flex items-center gap-2 text-xs">
-              <Server className={`w-4 h-4 ${ollamaAvailable ? 'text-green-400' : 'text-yellow-400'}`} />
+              <Server className={`w-4 h-4 flex-shrink-0 ${ollamaAvailable ? 'text-green-400' : 'text-yellow-400'}`} />
               <span className={ollamaAvailable ? 'text-green-400' : 'text-yellow-400'}>
-                {ollamaAvailable ? `Ollama Connected` : 'Ollama Offline (Pattern Matching)'}
+                {ollamaAvailable ? 'Connected' : 'Offline (Pattern Matching)'}
               </span>
             </div>
           )}
@@ -164,7 +164,8 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
             name="model"
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
-            className="px-3 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+            disabled={!ollamaAvailable || availableModels.length === 0}
+            className="px-3 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50 disabled:opacity-50 disabled:cursor-not-allowed min-w-0 max-w-[200px] truncate"
           >
             {availableModels.length > 0 ? (
               availableModels.map((model) => (
@@ -173,20 +174,11 @@ export default function AITrainingAssistant({ onCreateJob }: AITrainingAssistant
                 </option>
               ))
             ) : (
-              <>
-                <option value="llama3.2">llama3.2 (recommended)</option>
-                <option value="llama3.1">llama3.1</option>
-                <option value="qwen2.5">qwen2.5</option>
-                <option value="mistral">mistral</option>
-                <option value="codellama">codellama</option>
-                <option value="gemma2">gemma2</option>
-              </>
+              <option value="">
+                {ollamaAvailable === null ? 'Checking...' : ollamaAvailable ? 'No models - run: ollama pull llama3.2' : 'Ollama not running'}
+              </option>
             )}
           </select>
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <BookOpen className="w-4 h-4" />
-            <span>Tinker SDK</span>
-          </div>
         </div>
       </div>
 

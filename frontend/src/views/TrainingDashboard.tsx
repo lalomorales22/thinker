@@ -17,6 +17,8 @@ interface TrainingJob {
   reward?: number
   timeElapsed: string
   createdAt: string
+  statusMessage?: string
+  errorMessage?: string
 }
 
 export default function TrainingDashboard() {
@@ -97,7 +99,9 @@ export default function TrainingDashboard() {
             loss: j.metrics?.loss,
             reward: j.metrics?.reward,
             timeElapsed: '0s', // calc from started_at
-            createdAt: j.started_at || new Date().toISOString()
+            createdAt: j.started_at || new Date().toISOString(),
+            statusMessage: j.metrics?.status_message,
+            errorMessage: j.metrics?.error
           }))
           setJobs(mappedJobs)
 
@@ -156,12 +160,13 @@ export default function TrainingDashboard() {
 
       terminalLogger.debug(`Training config: ${JSON.stringify(config, null, 2)}`, 'training')
 
+      // Build headers conditionally (omit empty API key)
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (apiKey && apiKey.trim()) headers['X-API-Key'] = apiKey.trim()
+
       const response = await fetch(`${backendUrl}/api/training/start`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': apiKey
-        },
+        headers,
         body: JSON.stringify(config)
       })
 
@@ -206,11 +211,11 @@ export default function TrainingDashboard() {
   const handleDeleteJob = async (jobId: string) => {
     try {
       terminalLogger.info(`Deleting job ${jobId}...`, 'training')
+      const headers: Record<string, string> = {}
+      if (apiKey && apiKey.trim()) headers['X-API-Key'] = apiKey.trim()
       const response = await fetch(`${backendUrl}/api/training/jobs/${jobId}`, {
         method: 'DELETE',
-        headers: {
-          'X-API-Key': apiKey
-        }
+        headers
       })
 
       if (response.ok) {
@@ -243,8 +248,8 @@ export default function TrainingDashboard() {
     })
   }
 
-  const estimateTimeRemaining = (currentStep: number, totalSteps: number) => {
-    if (currentStep === 0) return 'Calculating...'
+  const estimateTimeRemaining = (currentStep: number, totalSteps: number, statusMessage?: string) => {
+    if (currentStep === 0) return statusMessage || 'Initializing...'
     const remainingSteps = totalSteps - currentStep
     // Rough estimate: ~1 second per step
     const seconds = remainingSteps
@@ -556,6 +561,16 @@ export default function TrainingDashboard() {
                             <span className="text-tactical-text-muted font-mono">{job.timeElapsed}</span>
                           </div>
                         </div>
+
+                        {/* Error Message for Failed Jobs */}
+                        {job.status === 'failed' && job.errorMessage && (
+                          <div className="mt-3 p-3 bg-red-900/20 border border-red-500/30 rounded-lg">
+                            <div className="flex items-start gap-2 text-xs text-red-300">
+                              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                              <span>{job.errorMessage}</span>
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* Expanded Details */}
@@ -569,7 +584,7 @@ export default function TrainingDashboard() {
                                 <span className="text-xs text-tactical-text-secondary uppercase">Time Remaining</span>
                               </div>
                               <div className="text-lg font-bold font-mono text-led-cyan">
-                                {estimateTimeRemaining(job.currentStep, job.totalSteps)}
+                                {estimateTimeRemaining(job.currentStep, job.totalSteps, job.statusMessage)}
                               </div>
                             </div>
 

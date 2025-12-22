@@ -98,11 +98,11 @@ function App() {
       {/* Main Layout - IDE Style */}
       <div className="flex-1 flex overflow-hidden">
         {/* Far Left Icon Sidebar */}
-        <div className="w-14 bg-obsidian-surface/50 backdrop-blur-tactical border-r border-obsidian-border flex flex-col items-center gap-3 py-4">
+        <div className="w-16 bg-obsidian-surface/50 backdrop-blur-tactical border-r border-obsidian-border flex flex-col items-center gap-1 py-4">
           {views.map((view) => (
             <div key={view.id} className="relative group">
               <button
-                className={`p-2.5 hover:bg-obsidian-hover rounded-tactical transition-all duration-200 ${
+                className={`p-2 hover:bg-obsidian-hover rounded-tactical transition-all duration-200 flex flex-col items-center gap-0.5 w-14 ${
                   currentView === view.id ? 'bg-obsidian-elevated shadow-inner-glow' : ''
                 }`}
                 title={view.label}
@@ -113,6 +113,9 @@ function App() {
                     currentView === view.id ? `text-led-${view.led}` : 'text-tactical-text-muted'
                   }`}
                 />
+                <span className={`text-[9px] font-medium transition-colors ${currentView === view.id ? `text-led-${view.led}` : 'text-tactical-text-muted'}`}>
+                  {view.id === 'training' ? 'Train' : view.id === 'models' ? 'Models' : view.id === 'datasets' ? 'Data' : view.id === 'playground' ? 'Chat' : view.id === 'analytics' ? 'Stats' : view.id === 'multiagent' ? 'Arena' : view.label}
+                </span>
                 {currentView === view.id && (
                   <div className="absolute left-0 top-0 w-1 h-full bg-tactical-primary rounded-r"></div>
                 )}

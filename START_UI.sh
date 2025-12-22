@@ -24,10 +24,10 @@ echo "🚀 Starting Backend Server..."
 cd "$(dirname "$0")/backend"
 
 # Check for virtual environment
-if [ -d "vewnv" ]; then
-    source vewnv/bin/activate
+if [ -d "venv" ]; then
+    source venv/bin/activate
 else
-    echo "⚠️  Virtual environment 'vewnv' not found in backend/"
+    echo "⚠️  Virtual environment 'venv' not found in backend/"
     echo "   Please create it or ensure dependencies are installed."
 fi
 

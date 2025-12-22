@@ -49,6 +49,8 @@ async def upload_dataset(
     x_api_key: Optional[str] = Header(None)
 ):
     """Upload a new dataset"""
+    # Normalize format to lowercase
+    format = format.lower()
     logger.info(f"Dataset upload started: {name} ({format})")
 
     # Set API key if provided

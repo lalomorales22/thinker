@@ -64,15 +64,20 @@ async def chat_completion(request: ChatRequest, x_api_key: Optional[str] = Heade
     if client:
         try:
             from tinker import types
-            tokenizer = client.tokenizer
+            # Get tokenizer from the agent (it comes from TrainingClient, not SamplingClient)
+            tokenizer = agent.get_tokenizer()
+            if not tokenizer:
+                raise Exception("Tokenizer not available - TrainingClient may not be initialized")
             prompt = types.ModelInput.from_ints(tokenizer.encode(prompt_text))
             params = types.SamplingParams(max_tokens=request.max_tokens, temperature=request.temperature)
 
-            future = client.sample_async(prompt=prompt, sampling_params=params, num_samples=1)
-            await future
-            result = await future
+            # Use the proper sample() method on SamplingClient
+            # The sync version returns a future, we call .result() to get the actual result
+            future = client.sample(prompt=prompt, sampling_params=params, num_samples=1)
+            result = future.result()
 
-            output_tokens = result.samples[0].token_ids
+            # Extract tokens from result - structure is result.sequences[0].tokens
+            output_tokens = result.sequences[0].tokens
             response_text = tokenizer.decode(output_tokens)
 
             return ChatResponse(

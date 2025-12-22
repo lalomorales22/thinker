@@ -91,9 +91,10 @@ export default function ModelsLibrary() {
             const baseData = await baseResponse.json()
             console.log('Base models response:', baseData)
 
-            // Transform strings to Model objects
+            // Transform strings to Model objects (handle both strings and objects for compatibility)
             const baseModels: Model[] = baseData.models
-              .filter((item: any) => typeof item === 'string') // Only process strings
+              .filter((item: any) => typeof item === 'string' || typeof item?.model_name === 'string')
+              .map((item: any) => typeof item === 'string' ? item : item.model_name)
               .map((name: string, index: number) => ({
                 id: `base-${index}`,
                 name: name.split('/').pop() || name,
@@ -285,9 +286,8 @@ export default function ModelsLibrary() {
                       </button>
                       {model.type !== 'base' && (
                         <button
-                          className={`btn btn-ghost btn-sm p-1.5 ${
-                            deletingModel === model.name ? 'text-red-600 bg-red-500/20' : 'text-red-400'
-                          }`}
+                          className={`btn btn-ghost btn-sm p-1.5 ${deletingModel === model.name ? 'text-red-600 bg-red-500/20' : 'text-red-400'
+                            }`}
                           title={deletingModel === model.name ? 'Click again to confirm' : 'Delete'}
                           onClick={(e) => {
                             e.stopPropagation()
@@ -441,11 +441,10 @@ export default function ModelsLibrary() {
               </button>
               {selectedModel.type !== 'base' && (
                 <button
-                  className={`btn btn-ghost w-full flex items-center justify-center gap-2 ${
-                    deletingModel === selectedModel.name
+                  className={`btn btn-ghost w-full flex items-center justify-center gap-2 ${deletingModel === selectedModel.name
                       ? 'text-red-600 bg-red-500/20'
                       : 'text-red-400 hover:text-red-300'
-                  }`}
+                    }`}
                   onClick={() => handleDeleteModel(selectedModel)}
                 >
                   <Trash2 className="w-4 h-4" />

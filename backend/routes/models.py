@@ -106,7 +106,8 @@ async def list_base_models(x_api_key: Optional[str] = Header(None)):
         service_client = tinker.ServiceClient()
         # Use async version to avoid sync-from-async warnings
         capabilities = await service_client.get_server_capabilities_async()
-        models = capabilities.supported_models
+        # Extract model_name from each model object (Tinker API returns objects, not strings)
+        models = [model.model_name for model in capabilities.supported_models]
         logger.info(f"Successfully fetched {len(models)} models from Tinker API")
         return {"models": models, "source": "tinker_api"}
     except Exception as e:

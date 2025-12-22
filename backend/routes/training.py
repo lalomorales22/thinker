@@ -40,10 +40,14 @@ class TrainingJob(BaseModel):
 @router.post("/start")
 async def start_training(config: TrainingConfig, background_tasks: BackgroundTasks, x_api_key: Optional[str] = Header(None)):
     """Start a new training job"""
-    # Set API key if provided
-    api_key = x_api_key or os.getenv("TINKER_API_KEY")
+    # Get API key from header (if not empty) or environment
+    # Treat empty string as no key provided
+    api_key = (x_api_key if x_api_key else None) or os.getenv("TINKER_API_KEY")
     if api_key:
         os.environ["TINKER_API_KEY"] = api_key
+        print(f"Using API key: {api_key[:15]}...{api_key[-5:]}")
+    else:
+        print("WARNING: No API key available!")
 
     job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
@@ -55,8 +59,8 @@ async def start_training(config: TrainingConfig, background_tasks: BackgroundTas
 
     training_jobs[job_id] = job.dict()
 
-    # Add background task to run training
-    background_tasks.add_task(run_training_job, job_id, config)
+    # Add background task to run training - pass API key explicitly
+    background_tasks.add_task(run_training_job, job_id, config, api_key)
 
     return {
         "job_id": job_id,
@@ -79,16 +83,21 @@ async def get_job(job_id: str):
 
 @router.delete("/jobs/{job_id}")
 async def cancel_job(job_id: str):
-    """Cancel a running training job"""
+    """Cancel and delete a training job"""
     if job_id not in training_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
     job = training_jobs[job_id]
-    if job["status"] == "running":
+    job_status = job["status"]
+    
+    # Mark as cancelled if running
+    if job_status == "running":
         job["status"] = "cancelled"
-        return {"message": "Job cancelled successfully"}
-    else:
-        return {"message": f"Job is {job['status']}, cannot cancel"}
+    
+    # Remove the job from the list
+    del training_jobs[job_id]
+    
+    return {"message": f"Job {job_id} deleted successfully", "previous_status": job_status}
 
 @router.get("/metrics/{job_id}")
 async def get_metrics(job_id: str):
@@ -489,11 +498,23 @@ async def run_dpo_training(job_id: str, config: TrainingConfig, training_batches
     return training_client
 
 # Background task for training
-async def run_training_job(job_id: str, config: TrainingConfig):
+async def run_training_job(job_id: str, config: TrainingConfig, api_key: Optional[str] = None):
     """
     Run the actual training job using Tinker SDK
     """
     print(f"Starting training job {job_id}...")
+    
+    # Set API key in environment for Tinker SDK
+    if api_key:
+        os.environ["TINKER_API_KEY"] = api_key
+        print(f"API key set from parameter: {api_key[:15]}...{api_key[-5:]}")
+    else:
+        # Try to get from environment
+        env_key = os.getenv("TINKER_API_KEY")
+        if env_key:
+            print(f"Using API key from environment: {env_key[:15]}...{env_key[-5:]}")
+        else:
+            print("WARNING: No TINKER_API_KEY found!")
     
     try:
         import tinker
@@ -510,21 +531,52 @@ async def run_training_job(job_id: str, config: TrainingConfig):
     job = training_jobs[job_id]
     job["status"] = "running"
     job["started_at"] = datetime.now()
+    job["metrics"]["status_message"] = "Initializing training client..."
     
     try:
         # Initialize client
-        service_client = tinker.ServiceClient()
-        training_client = await service_client.create_lora_training_client_async(
-            base_model=config.model_name,
-            rank=config.rank
-        )
+        job["metrics"]["status_message"] = "Connecting to Tinker SDK..."
+        # Log masked API key (for debugging)
+        try:
+            key = os.getenv("TINKER_API_KEY", "")
+            if key:
+                print(f"Using Tinker API key: {key[:4]}...{key[-6:]}")
+        except Exception:
+            pass
+
+        # Create service client with error handling
+        try:
+            service_client = tinker.ServiceClient()
+        except Exception as e:
+            training_jobs[job_id]["status"] = "failed"
+            training_jobs[job_id]["metrics"]["error"] = f"Failed to create ServiceClient: {str(e)}"
+            training_jobs[job_id]["metrics"]["status_message"] = "Initialization failed"
+            return
+        
+        job["metrics"]["status_message"] = f"Loading model {config.model_name}..."
+        try:
+            training_client = await service_client.create_lora_training_client_async(
+                base_model=config.model_name,
+                rank=config.rank
+            )
+        except Exception as e:
+            training_jobs[job_id]["status"] = "failed"
+            msg = str(e)
+            if "401" in msg or "Unable to validate api-key" in msg:
+                training_jobs[job_id]["metrics"]["error"] = "Authentication failed: Unable to validate Tinker API key"
+            else:
+                training_jobs[job_id]["metrics"]["error"] = f"Failed to initialize training client: {msg}"
+            training_jobs[job_id]["metrics"]["status_message"] = "Initialization failed"
+            return
 
         # Get tokenizer from client
-        tokenizer = training_client.tokenizer
+        job["metrics"]["status_message"] = "Loading tokenizer..."
+        tokenizer = training_client.get_tokenizer()
 
         # Load dataset if provided
         training_batches = []
         if config.dataset_id:
+            job["metrics"]["status_message"] = "Loading dataset..."
             try:
                 # Import datasets list from datasets route
                 from .datasets import datasets

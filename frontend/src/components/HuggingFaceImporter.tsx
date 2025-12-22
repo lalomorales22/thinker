@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Download, ChevronRight, Check, X, Loader2, Database, Info, AlertCircle } from 'lucide-react';
+import { useStore } from '../store/useStore';
 
 interface FieldMapping {
   source_field: string;
@@ -29,6 +30,7 @@ interface HuggingFaceImporterProps {
 }
 
 export default function HuggingFaceImporter({ onImportComplete, onClose }: HuggingFaceImporterProps) {
+  const backendUrl = useStore((state) => state.backendUrl);
   const [step, setStep] = useState(1); // 1: Search, 2: Select Split, 3: Map Fields, 4: Preview, 5: Import
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<DatasetSearchResult[]>([]);
@@ -50,7 +52,7 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`http://localhost:8000/api/huggingface/search?query=${searchQuery}&limit=10`);
+      const response = await fetch(`${backendUrl}/api/huggingface/search?query=${searchQuery}&limit=10`);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'Search failed' }));
@@ -72,7 +74,7 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`http://localhost:8000/api/huggingface/info/${encodeURIComponent(dataset.name)}`);
+      const response = await fetch(`${backendUrl}/api/huggingface/info/${encodeURIComponent(dataset.name)}`);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'Failed to fetch dataset info' }));
@@ -108,7 +110,7 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
       };
 
       setSelectedDataset(dataset);
-      const response = await fetch(`http://localhost:8000/api/huggingface/info/${encodeURIComponent(quickImportPath.trim())}`);
+      const response = await fetch(`${backendUrl}/api/huggingface/info/${encodeURIComponent(quickImportPath.trim())}`);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'Failed to load dataset' }));
@@ -132,7 +134,7 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
 
     try {
       const response = await fetch(
-        `http://localhost:8000/api/huggingface/suggest-mapping`,
+        `${backendUrl}/api/huggingface/suggest-mapping`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -157,7 +159,7 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
     if (!selectedDataset) return;
 
     try {
-      const response = await fetch('http://localhost:8000/api/huggingface/preview', {
+      const response = await fetch(`${backendUrl}/api/huggingface/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -182,7 +184,7 @@ export default function HuggingFaceImporter({ onImportComplete, onClose }: Huggi
 
     setImporting(true);
     try {
-      const response = await fetch('http://localhost:8000/api/huggingface/import', {
+      const response = await fetch(`${backendUrl}/api/huggingface/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

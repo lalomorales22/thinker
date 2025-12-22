@@ -74,3 +74,4 @@ wandb/
 data/*.jsonl
 data/*.json
 !data/example.jsonl
+tinker.txt

@@ -214,7 +214,7 @@ async def generate_ai_response_ollama(messages: List[ChatMessage], context: Opti
         for msg in messages:
             ollama_messages.append({"role": msg.role, "content": msg.content})
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             response = await client.post(
                 f"{ollama_url}/api/chat",
                 json={
