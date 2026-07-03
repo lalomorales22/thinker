@@ -6,6 +6,11 @@ and reinforcement learning, with HuggingFace dataset import wired straight into
 training, a live model catalog, and honest job/metric reporting (no fake data).
 """
 import os
+# Torch + the Tinker SDK can each link a copy of libomp; on macOS that aborts the
+# process with "OMP: Error #15" unless we allow the duplicate. Set before any
+# import that may pull torch/tinker.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 from dotenv import load_dotenv
 
 load_dotenv()

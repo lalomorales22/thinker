@@ -57,6 +57,8 @@ def check_tinker() -> dict[str, Any]:
 
 
 def _require_sdk():
+    import os
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")  # avoid libomp double-init abort
     try:
         import tinker
         from tinker import types

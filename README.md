@@ -56,9 +56,9 @@ servers. Then open **http://localhost:5173**.
 <summary>Manual setup</summary>
 
 ```bash
-# Backend
+# Backend — use Python 3.11–3.13 (the Tinker SDK isn't ready for 3.14+ yet)
 cd backend
-python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+python3.12 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
 ./.venv/bin/python -m uvicorn main:app --reload --port 8000
 
 # Frontend (in another terminal)
