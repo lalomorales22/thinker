@@ -1,215 +1,199 @@
-import { X, Heart } from 'lucide-react'
+import { useState } from 'react'
+import { KeyRound, Server, Bot, Plug, Eye, EyeOff, RefreshCw, ExternalLink, Sparkles } from 'lucide-react'
 import { useStore } from '../store/useStore'
+import { api } from '../lib/api'
+import { useAsync } from '../lib/hooks'
+import { TermText } from '../lib/glossary'
+import { Modal, Button, Input, Select, Field, Spinner, Badge, IconButton, toast } from './ui'
 
-interface SettingsModalProps {
-  onClose: () => void
+interface AssistantStatus {
+  available: boolean
+  models: string[]
+  default: string
+  error?: string
 }
 
-export default function SettingsModal({ onClose }: SettingsModalProps) {
-  const {
-    apiKey, setApiKey,
-    backendUrl, setBackendUrl,
-    baseModel, setBaseModel,
-    loraRank, setLoraRank,
-    learningRate, setLearningRate,
-    batchSize, setBatchSize,
-    editorFontSize, setEditorFontSize,
-    showMinimap, setShowMinimap,
-    smoothScrolling, setSmoothScrolling
-  } = useStore()
+export default function SettingsModal({ onClose }: { onClose: () => void }) {
+  // Draft state — initialized from the store, only committed on Save so Cancel truly discards.
+  const store = useStore()
+  const [draftKey, setDraftKey] = useState(store.apiKey)
+  const [draftUrl, setDraftUrl] = useState(store.backendUrl)
+  const [draftModel, setDraftModel] = useState(store.ollamaModel)
+  const [showKey, setShowKey] = useState(false)
+  const [testing, setTesting] = useState(false)
+
+  const { data: assistant, loading: assistantLoading, reload: reloadAssistant } =
+    useAsync<AssistantStatus>(() => api.assistant.status(), [])
+
+  async function testConnection() {
+    setTesting(true)
+    try {
+      const h = await api.health()
+      const parts = [
+        h.tinker_api_key ? 'Tinker key set' : 'no Tinker key',
+        h.tinker_sdk ? 'SDK ready' : 'SDK not installed',
+        `${h.catalog_count} models (${h.catalog_source})`,
+      ]
+      toast(`Connected — ${parts.join(' · ')}`, 'ok')
+    } catch (e: any) {
+      toast(e.message || 'Could not reach the backend', 'error')
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  function save() {
+    store.setApiKey(draftKey.trim())
+    store.setBackendUrl(draftUrl.trim() || 'http://localhost:8000')
+    store.setOllamaModel(draftModel)
+    toast('Settings saved')
+    onClose()
+  }
+
+  function replayWelcome() {
+    store.setSeenWelcome(false)
+    onClose()
+  }
+
+  // Keep the user's current selection available even if it's not in the live list.
+  const ollamaOptions = assistant?.available
+    ? Array.from(new Set([...(assistant.models || []), draftModel].filter(Boolean)))
+    : []
 
   return (
-    <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="tactical-panel-elevated w-full max-w-2xl max-h-[80vh] overflow-hidden mx-4">
-        {/* Header */}
-        <div className="tactical-panel-header">
+    <Modal
+      open
+      onClose={onClose}
+      title="Settings"
+      subtitle="Connect Thinker to Tinker and Ollama"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={save}>Save</Button>
+        </>
+      }
+    >
+      <div className="space-y-6">
+        {/* Tinker API key */}
+        <section className="space-y-2.5">
           <div className="flex items-center gap-2">
-            <span className="led led-cyan"></span>
-            <span className="font-display font-semibold uppercase tracking-wider text-sm">System Settings</span>
+            <span className="w-8 h-8 rounded-lg bg-orange-soft text-orange-ink flex items-center justify-center">
+              <KeyRound className="w-4 h-4" />
+            </span>
+            <h3 className="font-display font-bold text-ink">Tinker API key</h3>
           </div>
-          <button
-            onClick={onClose}
-            className="btn btn-ghost btn-xs p-1"
+          <Field
+            hint={
+              <>
+                Needed to actually train and chat with models. Without it you can still explore everything in{' '}
+                <TermText id="dry_run">Demo mode</TermText>.{' '}
+                <a className="link" href="https://tinker-docs.thinkingmachines.ai/" target="_blank" rel="noreferrer">
+                  where do I get a key?
+                </a>
+              </>
+            }
           >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+            <div className="relative">
+              <Input
+                type={showKey ? 'text' : 'password'}
+                value={draftKey}
+                onChange={(e) => setDraftKey(e.target.value)}
+                placeholder="sk-tinker-…"
+                autoComplete="off"
+                spellCheck={false}
+                className="pr-11 font-mono"
+              />
+              <IconButton
+                label={showKey ? 'Hide key' : 'Show key'}
+                onClick={() => setShowKey((s) => !s)}
+                className="absolute right-1 top-1/2 -translate-y-1/2"
+              >
+                {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </IconButton>
+            </div>
+          </Field>
+        </section>
 
-        {/* Content */}
-        <div className="p-5 overflow-y-auto max-h-[calc(80vh-120px)] space-y-5">
-          {/* API Configuration */}
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <span className="led led-purple"></span>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-tactical-text-secondary">API Configuration</h3>
-            </div>
-            <div className="space-y-2.5">
-              <div>
-                <label className="block text-xs font-medium text-tactical-text-secondary mb-1.5 uppercase tracking-wide">
-                  Tinker API Key
-                </label>
-                <input
-                  type="password"
-                  placeholder="Enter your Tinker API key"
-                  className="input-tactical font-mono text-xs"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-tactical-text-secondary mb-1.5 uppercase tracking-wide">
-                  Backend URL
-                </label>
-                <input
-                  type="text"
-                  className="input-tactical font-mono text-xs"
-                  value={backendUrl}
-                  onChange={(e) => setBackendUrl(e.target.value)}
-                />
-              </div>
-            </div>
-          </section>
+        {/* Backend URL + test */}
+        <section className="space-y-2.5">
+          <div className="flex items-center gap-2">
+            <span className="w-8 h-8 rounded-lg bg-orange-soft text-orange-ink flex items-center justify-center">
+              <Server className="w-4 h-4" />
+            </span>
+            <h3 className="font-display font-bold text-ink">Backend</h3>
+          </div>
+          <Field hint="Where the Thinker backend is running. The default is fine for most people.">
+            <Input
+              type="url"
+              value={draftUrl}
+              onChange={(e) => setDraftUrl(e.target.value)}
+              placeholder="http://localhost:8000"
+              spellCheck={false}
+              className="font-mono"
+            />
+          </Field>
+          <Button
+            variant="outline"
+            size="sm"
+            loading={testing}
+            icon={<Plug className="w-4 h-4" />}
+            onClick={testConnection}
+          >
+            Test connection
+          </Button>
+        </section>
 
-          {/* Training Defaults */}
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <span className="led led-teal"></span>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-tactical-text-secondary">Training Defaults</h3>
-            </div>
-            <div className="space-y-2.5">
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-xs font-medium text-tactical-text-secondary mb-1.5 uppercase tracking-wide">
-                    Base Model
-                  </label>
-                  <select
-                    className="input-tactical font-mono text-xs"
-                    value={baseModel}
-                    onChange={(e) => setBaseModel(e.target.value)}
-                  >
-                    <option>meta-llama/Llama-3.2-1B</option>
-                    <option>meta-llama/Llama-3.2-3B</option>
-                    <option>Qwen/Qwen2.5-7B-Instruct</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-tactical-text-secondary mb-1.5 uppercase tracking-wide">
-                    LoRA Rank
-                  </label>
-                  <input
-                    type="number"
-                    className="input-tactical font-mono text-xs"
-                    value={loraRank}
-                    onChange={(e) => setLoraRank(parseInt(e.target.value))}
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-xs font-medium text-tactical-text-secondary mb-1.5 uppercase tracking-wide">
-                    Learning Rate
-                  </label>
-                  <input
-                    type="text"
-                    className="input-tactical font-mono text-xs"
-                    value={learningRate}
-                    onChange={(e) => setLearningRate(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-tactical-text-secondary mb-1.5 uppercase tracking-wide">
-                    Batch Size
-                  </label>
-                  <input
-                    type="number"
-                    className="input-tactical font-mono text-xs"
-                    value={batchSize}
-                    onChange={(e) => setBatchSize(parseInt(e.target.value))}
-                  />
-                </div>
-              </div>
-            </div>
-          </section>
+        {/* Ollama model for the assistant */}
+        <section className="space-y-2.5">
+          <div className="flex items-center gap-2">
+            <span className="w-8 h-8 rounded-lg bg-orange-soft text-orange-ink flex items-center justify-center">
+              <Bot className="w-4 h-4" />
+            </span>
+            <h3 className="font-display font-bold text-ink flex items-center gap-2">
+              Assistant model
+              {assistant?.available && <Badge tone="orange">Ollama running</Badge>}
+            </h3>
+          </div>
 
-          {/* Appearance */}
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <span className="led led-blue"></span>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-tactical-text-secondary">Appearance</h3>
+          {assistantLoading ? (
+            <div className="flex items-center gap-2 text-sm text-ink-mute">
+              <Spinner className="w-4 h-4" /> Checking Ollama…
             </div>
-            <div className="space-y-2.5">
-              <div>
-                <label className="block text-xs font-medium text-tactical-text-secondary mb-1.5 uppercase tracking-wide">
-                  Editor Font Size
-                </label>
-                <input
-                  type="number"
-                  className="input-tactical font-mono text-xs"
-                  value={editorFontSize}
-                  onChange={(e) => setEditorFontSize(parseInt(e.target.value))}
-                />
-              </div>
-              <div className="tactical-panel p-2.5 flex items-center justify-between">
-                <span className="text-xs text-tactical-text-secondary">Show Minimap</span>
-                <input
-                  type="checkbox"
-                  className="w-4 h-4 accent-tactical-primary"
-                  checked={showMinimap}
-                  onChange={(e) => setShowMinimap(e.target.checked)}
-                />
-              </div>
-              <div className="tactical-panel p-2.5 flex items-center justify-between">
-                <span className="text-xs text-tactical-text-secondary">Smooth Scrolling</span>
-                <input
-                  type="checkbox"
-                  className="w-4 h-4 accent-tactical-primary"
-                  checked={smoothScrolling}
-                  onChange={(e) => setSmoothScrolling(e.target.checked)}
-                />
-              </div>
+          ) : assistant?.available ? (
+            <Field hint="Which local Ollama model powers the in-app assistant.">
+              <Select value={draftModel} onChange={(e) => setDraftModel(e.target.value)}>
+                <option value="">Server default{assistant.default ? ` (${assistant.default})` : ''}</option>
+                {ollamaOptions.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </Select>
+            </Field>
+          ) : (
+            <div className="rounded-xl border border-line bg-raised p-3.5 text-sm text-ink-soft space-y-1.5">
+              <p>
+                Ollama isn't running, so the assistant will fall back to a simple built-in helper.
+              </p>
+              <p className="text-ink-mute">
+                Install and start{' '}
+                <a className="link" href="https://ollama.com/" target="_blank" rel="noreferrer">
+                  Ollama <ExternalLink className="w-3 h-3 inline-block -mt-0.5" />
+                </a>{' '}
+                for smarter, local answers.
+              </p>
+              <button onClick={() => reloadAssistant().catch(() => {})} className="link inline-flex items-center gap-1">
+                <RefreshCw className="w-3.5 h-3.5" /> Check again
+              </button>
             </div>
-          </section>
+          )}
+        </section>
 
-          {/* About */}
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <span className="led led-green"></span>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-tactical-text-secondary">About</h3>
-            </div>
-            <div className="tactical-widget-glow p-3 space-y-2 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-tactical-text-secondary">Version</span>
-                <span className="font-mono text-tactical-primary">1.0.0</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-tactical-text-secondary">Framework</span>
-                <span className="font-mono text-tactical-primary">Tinker API</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-tactical-text-secondary">Theme</span>
-                <span className="font-mono text-tactical-primary">Obsidian Tactical</span>
-              </div>
-              <div className="pt-2 border-t border-obsidian-border text-center">
-                <div className="flex items-center justify-center gap-2 text-tactical-text-muted text-xs">
-                  <span>made w</span>
-                  <Heart className="w-3.5 h-3.5 fill-led-red text-led-red animate-pulse-slow" />
-                  <span>by lalo for Mira</span>
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        {/* Footer */}
-        <div className="border-t border-obsidian-border p-4 flex justify-end gap-3">
-          <button onClick={onClose} className="btn btn-ghost btn-sm">
-            Cancel
-          </button>
-          <button onClick={onClose} className="btn btn-primary btn-sm">
-            Save Changes
-          </button>
+        {/* Replay welcome */}
+        <div className="pt-1 border-t border-line">
+          <Button variant="ghost" size="sm" icon={<Sparkles className="w-4 h-4" />} onClick={replayWelcome}>
+            Replay welcome
+          </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }

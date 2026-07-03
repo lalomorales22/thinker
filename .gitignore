@@ -30,8 +30,13 @@ env/
 vewnv/
 backend/vewnv/
 
-# Data storage
+# Data storage / runtime state
 backend/data_storage/
+backend/storage/
+backend/.venv/
+*.db
+*.db-wal
+*.db-shm
 *.jsonl
 
 # Environment variables

@@ -1,398 +1,445 @@
-import { Send, RotateCcw, Copy, ThumbsUp, ThumbsDown, Zap, Settings, MessageSquare, Loader2 } from 'lucide-react'
-import { useState, useEffect, useRef } from 'react'
-import Editor from '@monaco-editor/react'
+import { useEffect, useRef, useState } from 'react'
+import { MessageSquare, GitCompare, ThumbsUp, ThumbsDown, Send, Database, KeyRound, Sparkles } from 'lucide-react'
+import { api, CatalogModel, TrainedModel } from '../lib/api'
+import { useAsync } from '../lib/hooks'
 import { useStore } from '../store/useStore'
+import { Button, Card, Field, Select, Textarea, Segmented, Spinner, Skeleton, EmptyState, Badge, toast } from '../components/ui'
+import { InfoTip } from '../lib/glossary'
+import { cn } from '../lib/util'
 
-interface Message {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  timestamp: string
-  metadata?: {
-    model?: string
-    tokens?: number
-    latency?: number
-  }
-}
+type Mode = 'chat' | 'compare'
+interface ChatMsg { role: 'user' | 'assistant'; content: string; prompt?: string }
+
+// "Qwen/Qwen3.5-4B" -> "Qwen3.5-4B"
+const short = (s?: string | null) => (s || '').split('/').pop() || s || ''
+const typeLabel = (t?: string) => (t || '').toUpperCase()
 
 export default function Playground() {
-  const backendUrl = useStore((state) => state.backendUrl)
-  const apiKey = useStore((state) => state.apiKey)
-  const selectedPlaygroundModel = useStore((state) => state.selectedPlaygroundModel)
-  const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState('')
-  const [selectedModel, setSelectedModel] = useState('')
-  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const apiKey = useStore((s) => s.apiKey)
+  const bump = useStore((s) => s.bump)
+  const dataVersion = useStore((s) => s.dataVersion)
+
+  const saved = useAsync(() => api.models.saved(), [dataVersion])
+  const catalog = useAsync(() => api.models.catalog(), [])
+  const feedback = useAsync(() => api.chat.feedbackList(), [dataVersion])
+
+  const trainedModels: TrainedModel[] = saved.data?.models ?? []
+  const recommendedIds: string[] = catalog.data?.recommended ?? []
+  const allCatalog: CatalogModel[] = catalog.data?.models ?? []
+  const baseModels = allCatalog.filter((m) => m.recommended || recommendedIds.includes(m.id))
+
+  const [mode, setMode] = useState<Mode>('chat')
   const [temperature, setTemperature] = useState(0.7)
-  const [maxTokens, setMaxTokens] = useState(512)
-  const [showSettings, setShowSettings] = useState(false)
-  const [codeInput, setCodeInput] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // Fetch available models
+  // --- Chat state -----------------------------------------------------------
+  const [chatModel, setChatModel] = useState('')
+  const [messages, setMessages] = useState<ChatMsg[]>([])
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [rated, setRated] = useState<Record<number, 'up' | 'down'>>({})
+  const [openIdx, setOpenIdx] = useState<number | null>(null)
+  const [betterText, setBetterText] = useState('')
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  // --- Compare state --------------------------------------------------------
+  const [cmpBase, setCmpBase] = useState('')
+  const [cmpTrained, setCmpTrained] = useState('')
+  const [cmpPrompt, setCmpPrompt] = useState('')
+  const [cmpResult, setCmpResult] = useState<{ base: string; tuned: string } | null>(null)
+  const [comparing, setComparing] = useState(false)
+
+  // Pick sensible defaults once the catalog / saved models arrive.
   useEffect(() => {
-    const fetchModels = async () => {
-      try {
-        const allModels: string[] = []
-
-        // Fetch trained models first
-        try {
-          const trainedResponse = await fetch(`${backendUrl}/api/models/`, {
-            headers: {
-              'X-API-Key': apiKey
-            }
-          })
-          if (trainedResponse.ok) {
-            const trainedData = await trainedResponse.json()
-            const trainedPaths = trainedData.models.map((model: any) => model.checkpoint_path || model.name)
-            allModels.push(...trainedPaths)
-          }
-        } catch (error) {
-          console.error('Failed to fetch trained models:', error)
-        }
-
-        // Fetch base models
-        const response = await fetch(`${backendUrl}/api/models/base/available`, {
-          headers: {
-            'X-API-Key': apiKey
-          }
-        })
-        if (response.ok) {
-          const data = await response.json()
-          // Handle both string arrays and model objects with model_name property
-          const baseModels = data.models.map((model: string | { model_name: string }) =>
-            typeof model === 'string' ? model : model.model_name
-          )
-          allModels.push(...baseModels)
-        }
-
-        setAvailableModels(allModels)
-        if (allModels.length > 0 && !selectedModel) {
-          setSelectedModel(allModels[0])
-        }
-      } catch (error) {
-        console.error('Failed to fetch models:', error)
-        // Fallback
-        setAvailableModels(['meta-llama/Llama-3.2-1B'])
-      }
-    }
-    fetchModels()
-  }, [backendUrl, apiKey])
-
-  // Pre-select model from store if available
+    if (chatModel) return
+    const def = catalog.data?.recommended_default
+    if (def) setChatModel(def)
+    else if (baseModels[0]) setChatModel(baseModels[0].id)
+    // eslint-disable-next-line
+  }, [catalog.data])
   useEffect(() => {
-    if (selectedPlaygroundModel && availableModels.includes(selectedPlaygroundModel)) {
-      setSelectedModel(selectedPlaygroundModel)
-    }
-  }, [selectedPlaygroundModel, availableModels])
-
-  // Auto-scroll to bottom
+    if (!cmpBase && catalog.data?.recommended_default) setCmpBase(catalog.data.recommended_default)
+    // eslint-disable-next-line
+  }, [catalog.data])
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    if (!cmpTrained && trainedModels[0]) setCmpTrained(trainedModels[0].sampler_path || trainedModels[0].id)
+    // eslint-disable-next-line
+  }, [saved.data])
 
-  const handleSend = async () => {
-    if ((!input.trim() && !codeInput.trim()) || isLoading) return
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, sending])
 
-    const userContent = input && codeInput
-      ? `${input}\n\nCode Context:\n\`\`\`\n${codeInput}\n\`\`\``
-      : input
-        ? input
-        : `Review this code:\n\n\`\`\`\n${codeInput}\n\`\`\``
+  const count: number = feedback.data?.count ?? 0
 
-    const newMessage: Message = {
-      id: `msg_${Date.now()}`,
-      role: 'user',
-      content: userContent,
-      timestamp: new Date().toLocaleTimeString()
-    }
-
-    setMessages(prev => [...prev, newMessage])
-    setInput('')
-    setIsLoading(true)
-
-    const startTime = Date.now()
-
+  // --- Actions --------------------------------------------------------------
+  async function send() {
+    const text = draft.trim()
+    if (!text || !chatModel || sending || !apiKey) return
+    const next = [...messages, { role: 'user' as const, content: text }]
+    setMessages(next)
+    setDraft('')
+    setSending(true)
     try {
-      const response = await fetch(`${backendUrl}/api/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': apiKey
-        },
-        body: JSON.stringify({
-          model_name: selectedModel,
-          messages: [{ role: 'user', content: userContent }],
-          temperature: temperature,
-          max_tokens: maxTokens
-        })
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        const endTime = Date.now()
-
-        const assistantMessage: Message = {
-          id: `msg_${Date.now()}_a`,
-          role: 'assistant',
-          content: data.response,
-          timestamp: new Date().toLocaleTimeString(),
-          metadata: {
-            model: data.model,
-            tokens: data.tokens_used,
-            latency: (endTime - startTime) / 1000
-          }
-        }
-        setMessages(prev => [...prev, assistantMessage])
-      } else {
-        throw new Error('Failed to get response')
-      }
-    } catch (error) {
-      console.error('Chat error:', error)
-      let errorMsg = "Sorry, I encountered an error processing your request."
-
-      if (!apiKey) {
-        errorMsg = "⚠️ API Key not set! Please go to Settings (top right) and enter your Tinker API key."
-      } else if (!backendUrl) {
-        errorMsg = "⚠️ Backend URL not configured! Please check Settings."
-      } else {
-        errorMsg = "❌ Error communicating with backend. Please ensure:\n1. Backend is running\n2. API key is correct\n3. Backend URL is correct"
-      }
-
-      const errorMessage: Message = {
-        id: `msg_${Date.now()}_err`,
-        role: 'assistant',
-        content: errorMsg,
-        timestamp: new Date().toLocaleTimeString()
-      }
-      setMessages(prev => [...prev, errorMessage])
+      const payload = next.map((m) => ({ role: m.role, content: m.content }))
+      const res = await api.chat.message({ model: chatModel, messages: payload, temperature })
+      setMessages((m) => [...m, { role: 'assistant', content: res.response ?? '', prompt: text }])
+    } catch (e: any) {
+      toast(e.message || 'Generation failed', 'error')
     } finally {
-      setIsLoading(false)
+      setSending(false)
     }
   }
 
+  async function submitBetter(idx: number) {
+    const msg = messages[idx]
+    const better = betterText.trim()
+    if (!msg || !better) return
+    try {
+      await api.chat.feedback({ prompt: msg.prompt || '', chosen: better, rejected: msg.content })
+      setRated((r) => ({ ...r, [idx]: 'down' }))
+      setOpenIdx(null)
+      setBetterText('')
+      toast('Saved — your better answer is now preference data', 'ok')
+      feedback.reload().catch(() => {})
+      bump()
+    } catch (e: any) {
+      toast(e.message || 'Could not save feedback', 'error')
+    }
+  }
+
+  function thumbUp(idx: number) {
+    setRated((r) => ({ ...r, [idx]: 'up' }))
+    setOpenIdx(null)
+    toast('Glad it helped — thumbs up noted', 'info')
+  }
+
+  async function runCompare() {
+    if (!cmpBase || !cmpTrained || !cmpPrompt.trim() || comparing || !apiKey) return
+    setComparing(true)
+    setCmpResult(null)
+    try {
+      const res = await api.chat.compare({ base_model: cmpBase, trained_model: cmpTrained, prompt: cmpPrompt })
+      setCmpResult({ base: res.base?.response ?? '', tuned: res.tuned?.response ?? '' })
+    } catch (e: any) {
+      toast(e.message || 'Comparison failed', 'error')
+    } finally {
+      setComparing(false)
+    }
+  }
+
+  async function pickBetter(which: 'base' | 'tuned') {
+    if (!cmpResult) return
+    const chosen = which === 'base' ? cmpResult.base : cmpResult.tuned
+    const rejected = which === 'base' ? cmpResult.tuned : cmpResult.base
+    try {
+      await api.chat.feedback({ prompt: cmpPrompt, chosen, rejected })
+      toast('Preference saved — great DPO data', 'ok')
+      feedback.reload().catch(() => {})
+      bump()
+    } catch (e: any) {
+      toast(e.message || 'Could not save feedback', 'error')
+    }
+  }
+
+  const [making, setMaking] = useState(false)
+  async function toDataset() {
+    if (count < 1 || making) return
+    setMaking(true)
+    try {
+      await api.chat.feedbackToDataset('playground-preferences')
+      toast('Created dataset "playground-preferences" — train it with DPO from Train', 'ok')
+      bump()
+    } catch (e: any) {
+      toast(e.message || 'Could not build dataset', 'error')
+    } finally {
+      setMaking(false)
+    }
+  }
+
+  const modelsLoading = catalog.loading || saved.loading
+  const canSend = !!apiKey && !!chatModel && !!draft.trim() && !sending
+
   return (
-    <div className="h-full flex flex-col bg-obsidian-bg">
-      {/* API Key Warning Banner */}
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="font-display font-bold text-3xl text-ink">Playground</h1>
+        <p className="text-ink-soft mt-1 max-w-2xl">
+          Chat with a model, compare a base model against one you tuned, and turn your ratings into training data.
+        </p>
+      </div>
+
+      {/* No-key notice */}
       {!apiKey && (
-        <div className="bg-yellow-500/20 border-b border-yellow-500/50 px-4 py-2 text-sm text-yellow-200 flex items-center gap-2">
-          <span>⚠️</span>
-          <span>API Key not set! Please configure your Tinker API key in Settings to use the playground.</span>
+        <div className="card card-pad flex items-start gap-3 border-orange/30 bg-orange-soft/50">
+          <div className="w-9 h-9 shrink-0 rounded-lg bg-orange-soft text-orange-ink flex items-center justify-center">
+            <KeyRound className="w-4.5 h-4.5" />
+          </div>
+          <div className="text-sm">
+            <p className="font-semibold text-ink">Chatting needs a Tinker key</p>
+            <p className="text-ink-soft mt-0.5">
+              Add your key in Settings (the gear at the bottom-left) to send messages. You can still look around and build a dataset from any ratings you already have.
+            </p>
+          </div>
         </div>
       )}
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Panel - Code Editor */}
-        <div className="flex-1 flex flex-col border-r border-obsidian-border">
-        <div className="tactical-panel-header">
-          <div className="flex items-center gap-2">
-            <span className="led led-teal"></span>
-            <span className="text-xs font-semibold uppercase tracking-wider">Code Input</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <select
-              className="input-tactical text-xs px-3 py-1.5 font-mono"
-              defaultValue="python"
-            >
-              <option value="python">Python</option>
-              <option value="javascript">JavaScript</option>
-              <option value="typescript">TypeScript</option>
-              <option value="go">Go</option>
-              <option value="rust">Rust</option>
-            </select>
-            <button className="btn btn-ghost btn-xs p-1.5" onClick={() => setCodeInput('')}>
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-
-        <div className="flex-1">
-          <Editor
-            language="python"
-            theme="vs-dark"
-            value={codeInput}
-            onChange={(value) => setCodeInput(value || '')}
-            options={{
-              minimap: { enabled: false },
-              fontSize: 13,
-              lineNumbers: 'on',
-              scrollBeyondLastLine: false,
-              automaticLayout: true,
-              tabSize: 2,
-            }}
-          />
-        </div>
-
-        <div className="border-t border-obsidian-border p-3">
-          <button
-            className="btn btn-primary w-full flex items-center justify-center gap-2"
-            onClick={handleSend}
-            disabled={isLoading}
-          >
-            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-            Review Code
-          </button>
-        </div>
-      </div>
-
-      {/* Right Panel - Chat Interface */}
-      <div className="flex-1 flex flex-col">
-        <div className="tactical-panel-header">
-          <div className="flex items-center gap-2">
-            <span className="led led-blue"></span>
-            <span className="text-xs font-semibold uppercase tracking-wider">Conversation</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <select
-              className="input-tactical text-xs px-3 py-1.5 font-mono max-w-[200px]"
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-            >
-              {availableModels.map(model => (
-                <option key={model} value={model}>{model}</option>
-              ))}
-            </select>
-            <button
-              className={`btn btn-ghost btn-xs p-1.5 ${showSettings ? 'text-brain-blue-400' : ''}`}
-              onClick={() => setShowSettings(!showSettings)}
-            >
-              <Settings className="w-3.5 h-3.5" />
-            </button>
-            <button className="btn btn-ghost btn-xs p-1.5" onClick={() => setMessages([])}>
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Settings Panel */}
-        {showSettings && (
-          <div className="border-b border-obsidian-border p-4 bg-obsidian-surface space-y-3 animate-in slide-in-from-top-2">
-            <div>
-              <div className="flex justify-between mb-1">
-                <label className="block text-xs font-medium">Temperature</label>
-                <span className="text-xs font-mono text-dark-text-secondary">{temperature}</span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.1"
-                value={temperature}
-                onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                className="w-full accent-brain-blue-500"
-              />
+      {/* Feedback loop bar */}
+      <Card className="card-pad">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 shrink-0 rounded-xl bg-orange-soft text-orange-ink flex items-center justify-center">
+              <ThumbsUp className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex justify-between mb-1">
-                <label className="block text-xs font-medium">Max Tokens</label>
-                <span className="text-xs font-mono text-dark-text-secondary">{maxTokens}</span>
+              <div className="font-display font-bold text-lg text-ink flex items-center gap-1.5">
+                {feedback.loading && !feedback.data ? (
+                  <Skeleton className="h-6 w-40" />
+                ) : (
+                  <>
+                    {count} rating{count === 1 ? '' : 's'} collected
+                    <InfoTip term="dpo" />
+                  </>
+                )}
               </div>
-              <input
-                type="range"
-                min="64"
-                max="4096"
-                step="64"
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(parseInt(e.target.value))}
-                className="w-full accent-brain-blue-500"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4">
-          {messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <MessageSquare className="w-16 h-16 text-tactical-500 mb-4 opacity-50" />
-              <h3 className="text-lg font-semibold text-dark-text mb-2">No messages yet</h3>
-              <p className="text-sm text-dark-text-secondary max-w-md">
-                Start a conversation by entering code or sending a message. Select a model from the dropdown to begin.
+              <p className="text-sm text-ink-soft mt-0.5 max-w-xl">
+                Your 👍/👎 and comparisons become preference pairs. Bundle them into a dataset and train with DPO — that closes the RLHF loop.
               </p>
             </div>
-          ) : (
-            messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[85%] rounded-ide p-3 ${message.role === 'user'
-                    ? 'bg-brain-blue-500/20 border border-brain-blue-500/50'
-                    : 'bg-dark-surface border border-dark-border'
-                    }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-medium text-dark-text-secondary">
-                      {message.role === 'user' ? 'You' : message.metadata?.model || 'Assistant'}
-                    </span>
-                    <span className="text-xs text-dark-text-secondary">{message.timestamp}</span>
-                  </div>
-
-                  <div className="text-sm whitespace-pre-wrap prose prose-invert max-w-none font-sans">
-                    {message.content}
-                  </div>
-
-                  {message.metadata && (
-                    <div className="flex items-center gap-3 mt-3 pt-3 border-t border-dark-border text-xs text-dark-text-secondary font-mono">
-                      <span>{message.metadata.tokens} tokens</span>
-                      <span>{message.metadata.latency?.toFixed(2)}s</span>
-                    </div>
-                  )}
-
-                  {message.role === 'assistant' && (
-                    <div className="flex items-center gap-2 mt-3 pt-3 border-t border-dark-border">
-                      <button className="btn btn-ghost btn-sm p-1.5 hover:text-white" title="Copy">
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
-                      <button className="btn btn-ghost btn-sm p-1.5 text-green-400/70 hover:text-green-400" title="Good response">
-                        <ThumbsUp className="w-3.5 h-3.5" />
-                      </button>
-                      <button className="btn btn-ghost btn-sm p-1.5 text-red-400/70 hover:text-red-400" title="Bad response">
-                        <ThumbsDown className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input */}
-        <div className="border-t border-dark-border p-3 bg-dark-bg">
-          <div className="flex items-end gap-2">
-            <textarea
-              className="input-field flex-1 resize-none min-h-[80px]"
-              rows={3}
-              placeholder="Ask a question or request a code review..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  handleSend()
-                }
-              }}
-              disabled={isLoading}
-            />
-            <button
-              className="btn btn-primary p-2.5 h-[42px] w-[42px] flex items-center justify-center"
-              onClick={handleSend}
-              disabled={isLoading || (!input.trim() && !codeInput.trim())}
-            >
-              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            </button>
           </div>
-          <p className="text-xs text-dark-text-secondary mt-2 flex justify-between">
-            <span>Press Enter to send, Shift+Enter for new line</span>
-            {isLoading && <span className="text-brain-blue-400 animate-pulse">Thinking...</span>}
-          </p>
+          <div className="flex flex-col items-end gap-1">
+            <Button variant="dark" icon={<Database className="w-4 h-4" />} loading={making} disabled={count < 1 || making} onClick={toDataset}>
+              Turn into a preference dataset
+            </Button>
+            {count < 1 && !feedback.loading && (
+              <span className="text-xs text-ink-mute">Rate a few replies first.</span>
+            )}
+          </div>
+        </div>
+      </Card>
+
+      {/* Mode + temperature */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <Segmented<Mode>
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: 'chat', label: <span className="inline-flex items-center gap-1.5"><MessageSquare className="w-4 h-4" /> Chat</span> },
+            { value: 'compare', label: <span className="inline-flex items-center gap-1.5"><GitCompare className="w-4 h-4" /> Compare</span> },
+          ]}
+        />
+        <div className="flex items-center gap-2.5">
+          <span className="text-[13px] font-semibold text-ink-soft flex items-center gap-1">
+            Temperature <InfoTip term="temperature" />
+          </span>
+          <input
+            type="range" min={0} max={1} step={0.1} value={temperature}
+            onChange={(e) => setTemperature(Number(e.target.value))}
+            aria-label="Temperature"
+            className="accent-orange w-36 cursor-pointer"
+          />
+          <span className="font-mono text-sm text-ink-soft w-8 text-right">{temperature.toFixed(1)}</span>
         </div>
       </div>
-      </div>
+
+      {/* ---- CHAT ---- */}
+      {mode === 'chat' && (
+        <Card className="flex flex-col">
+          <div className="p-5 border-b border-line">
+            <Field label="Model">
+              {modelsLoading ? (
+                <Skeleton className="h-10 w-full" />
+              ) : (
+                <Select value={chatModel} onChange={(e) => setChatModel(e.target.value)}>
+                  <option value="" disabled>Choose a model…</option>
+                  {trainedModels.length > 0 && (
+                    <optgroup label="Your trained models">
+                      {trainedModels.map((m) => (
+                        <option key={m.id} value={m.sampler_path || m.id}>
+                          {short(m.base_model)} · {typeLabel(m.training_type)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label="Base models">
+                    {baseModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </optgroup>
+                </Select>
+              )}
+            </Field>
+          </div>
+
+          {/* Thread */}
+          <div className="min-h-[280px] max-h-[52vh] overflow-y-auto px-5 py-5 space-y-4">
+            {messages.length === 0 && !sending ? (
+              <EmptyState
+                icon={<MessageSquare className="w-6 h-6" />}
+                title="Say hello"
+                description="Send a message to see how this model responds. Rate each reply to build training data as you go."
+              />
+            ) : (
+              messages.map((m, i) =>
+                m.role === 'user' ? (
+                  <div key={i} className="flex justify-end">
+                    <div className="max-w-[80%] rounded-xl2 rounded-tr-md bg-orange text-white px-4 py-2.5 text-sm whitespace-pre-wrap leading-relaxed shadow-sm">
+                      {m.content}
+                    </div>
+                  </div>
+                ) : (
+                  <div key={i} className="flex flex-col items-start gap-1.5">
+                    <div className="max-w-[85%] rounded-xl2 rounded-tl-md bg-paper border border-line px-4 py-2.5 text-sm text-ink whitespace-pre-wrap leading-relaxed">
+                      {m.content || <span className="text-ink-mute italic">No response.</span>}
+                    </div>
+                    {/* Rating controls */}
+                    <div className="flex items-center gap-2 pl-1">
+                      {rated[i] === 'up' ? (
+                        <span className="text-xs text-orange-ink font-semibold inline-flex items-center gap-1"><ThumbsUp className="w-3.5 h-3.5" /> Marked helpful</span>
+                      ) : rated[i] === 'down' ? (
+                        <span className="text-xs text-ink-mute font-semibold inline-flex items-center gap-1"><ThumbsDown className="w-3.5 h-3.5" /> Better answer saved</span>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => thumbUp(i)}
+                            className="btn btn-ghost btn-xs" aria-label="Good reply"
+                          >
+                            <ThumbsUp className="w-3.5 h-3.5" /> Good
+                          </button>
+                          <button
+                            onClick={() => { setOpenIdx(openIdx === i ? null : i); setBetterText('') }}
+                            className="btn btn-ghost btn-xs" aria-label="Suggest a better reply"
+                          >
+                            <ThumbsDown className="w-3.5 h-3.5" /> Better?
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {/* Inline "what would've been better" */}
+                    {openIdx === i && rated[i] === undefined && (
+                      <div className="w-full max-w-[85%] card card-pad bg-raised space-y-2">
+                        <p className="text-xs text-ink-soft">
+                          What would’ve been better? Your rewrite becomes the <b>chosen</b> answer and this reply the <b>rejected</b> one — ready to train with DPO.
+                        </p>
+                        <Textarea
+                          rows={3} value={betterText} autoFocus
+                          onChange={(e) => setBetterText(e.target.value)}
+                          placeholder="Write the answer you wish it had given…"
+                        />
+                        <div className="flex items-center gap-2 justify-end">
+                          <Button variant="ghost" size="sm" onClick={() => { setOpenIdx(null); setBetterText('') }}>Cancel</Button>
+                          <Button variant="primary" size="sm" disabled={!betterText.trim()} onClick={() => submitBetter(i)}>Save preference</Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              )
+            )}
+            {sending && (
+              <div className="flex items-center gap-2 text-sm text-ink-mute pl-1">
+                <Spinner className="w-4 h-4" /> Thinking…
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+
+          {/* Composer */}
+          <div className="p-4 border-t border-line bg-raised rounded-b-xl2">
+            <div className="flex items-end gap-2">
+              <Textarea
+                rows={2} value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
+                placeholder={apiKey ? 'Type a message… (Enter to send, Shift+Enter for a new line)' : 'Add a Tinker key in Settings to chat'}
+                disabled={!apiKey}
+                className="flex-1 resize-none"
+              />
+              <Button variant="primary" icon={<Send className="w-4 h-4" />} loading={sending} disabled={!canSend} onClick={send}>
+                Send
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* ---- COMPARE ---- */}
+      {mode === 'compare' && (
+        <div className="space-y-5">
+          <Card className="card-pad space-y-4">
+            <div className="flex items-start gap-2">
+              <Sparkles className="w-4 h-4 text-orange mt-0.5 shrink-0" />
+              <p className="text-sm text-ink-soft">
+                Ask the same thing to a base model and one you tuned, then pick the better answer. Each pick is saved as a preference pair — exactly the data that trains a <InfoTip term="dpo" /> model.
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Base model" term="base_model">
+                {catalog.loading ? <Skeleton className="h-10 w-full" /> : (
+                  <Select value={cmpBase} onChange={(e) => setCmpBase(e.target.value)}>
+                    <option value="" disabled>Choose a base model…</option>
+                    {baseModels.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </Select>
+                )}
+              </Field>
+              <Field label="Your tuned model">
+                {saved.loading ? <Skeleton className="h-10 w-full" /> : trainedModels.length === 0 ? (
+                  <div className="input flex items-center text-ink-mute text-sm">No trained models yet — train one first.</div>
+                ) : (
+                  <Select value={cmpTrained} onChange={(e) => setCmpTrained(e.target.value)}>
+                    <option value="" disabled>Choose a tuned model…</option>
+                    {trainedModels.map((m) => (
+                      <option key={m.id} value={m.sampler_path || m.id}>{short(m.base_model)} · {typeLabel(m.training_type)}</option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+            </div>
+            <Field label="Prompt" term="prompt">
+              <Textarea
+                rows={3} value={cmpPrompt}
+                onChange={(e) => setCmpPrompt(e.target.value)}
+                placeholder="Ask both models the same thing…"
+              />
+            </Field>
+            <div className="flex justify-end">
+              <Button
+                variant="primary" icon={<GitCompare className="w-4 h-4" />} loading={comparing}
+                disabled={!apiKey || !cmpBase || !cmpTrained || !cmpPrompt.trim() || comparing}
+                onClick={runCompare}
+              >
+                Compare answers
+              </Button>
+            </div>
+            {!apiKey && <p className="text-xs text-ink-mute text-right -mt-2">Add a Tinker key in Settings to run a comparison.</p>}
+          </Card>
+
+          {comparing && (
+            <Card className="card-pad flex items-center justify-center gap-2 text-ink-mute text-sm py-10">
+              <Spinner className="w-4 h-4" /> Asking both models…
+            </Card>
+          )}
+
+          {cmpResult && !comparing && (
+            <div className="grid gap-4 md:grid-cols-2">
+              {(['base', 'tuned'] as const).map((which) => (
+                <Card key={which} className="card-pad flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <Badge tone={which === 'tuned' ? 'orange' : 'neutral'}>{which === 'tuned' ? 'Tuned' : 'Base'}</Badge>
+                    <span className="text-xs text-ink-mute font-mono truncate max-w-[55%]" title={which === 'base' ? cmpBase : cmpTrained}>
+                      {which === 'base' ? short(cmpBase) : short(cmpTrained)}
+                    </span>
+                  </div>
+                  <div className="text-sm text-ink whitespace-pre-wrap leading-relaxed min-h-[80px]">
+                    {(which === 'base' ? cmpResult.base : cmpResult.tuned) || <span className="text-ink-mute italic">No response.</span>}
+                  </div>
+                  <Button variant="soft" size="sm" icon={<ThumbsUp className="w-4 h-4" />} className="self-start mt-auto" onClick={() => pickBetter(which)}>
+                    This one’s better
+                  </Button>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

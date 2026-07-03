@@ -1,144 +1,179 @@
 """
-Chat/interaction routes for communicating with trained models
+Playground / inference routes — chat with a base or trained model.
+
+Fixes the old flow that, per message, created a whole LoRA *training* client,
+saved weights, blocked the event loop with `future.result()`, and tokenized a
+raw "role: content" string. Here we cache a persistent SamplingClient per model,
+build the prompt with the model's renderer, and sample asynchronously.
+
+Also hosts the human-feedback loop: 👍/👎 comparisons are stored as preference
+pairs that can be turned into a real DPO dataset (closing the RLHF loop the app
+used to only pretend to have).
 """
-from fastapi import APIRouter, HTTPException, Header
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from __future__ import annotations
+
 import os
-from agents.code_review_agent import CodeReviewAgent
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import APIRouter, Header, HTTPException
+from pydantic import BaseModel, Field
+
+import db
+from config import DATASETS_DIR, get_tinker_api_key
+from training import engine
+from utils import logger
 
 router = APIRouter()
 
-class Message(BaseModel):
-    role: str  # user, assistant, system
+# Cache: key -> (SamplingClient, renderer, tokenizer)
+_samplers: dict[str, tuple] = {}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _get_sampler(model: str, api_key: Optional[str]):
+    """Resolve `model` (a trained-model id or a base-model id) to a cached sampler."""
+    if model in _samplers:
+        return _samplers[model]
+
+    tinker, types, _ = engine.load_sdk()
+    if api_key:
+        os.environ["TINKER_API_KEY"] = api_key
+    service = tinker.ServiceClient()
+
+    trained = db.get_model(model)
+    if trained and trained.get("sampler_path"):
+        sampling_client = await service.create_sampling_client_async(model_path=trained["sampler_path"])
+        base_model = trained["base_model"]
+    else:
+        base_model = model
+        sampling_client = await service.create_sampling_client_async(base_model=base_model)
+
+    tokenizer = sampling_client.get_tokenizer()
+    renderer, _name = engine.build_renderer(base_model, tokenizer)
+    entry = (sampling_client, renderer, tokenizer)
+    _samplers[model] = entry
+    return entry
+
+
+class ChatMessage(BaseModel):
+    role: str
     content: str
 
+
 class ChatRequest(BaseModel):
-    model_name: str
-    messages: List[Message]
+    model: str                                   # trained-model id OR base-model id
+    messages: list[ChatMessage] = Field(default_factory=list)
+    prompt: Optional[str] = None                 # convenience single-turn
+    max_tokens: int = 512
     temperature: float = 0.7
-    max_tokens: int = 2048
-    
-    model_config = {'protected_namespaces': ()}
 
-class ChatResponse(BaseModel):
-    response: str
-    model: str
-    tokens_used: int
+    model_config = {"protected_namespaces": ()}
 
-@router.post("/completions")
-async def chat_completion(request: ChatRequest, x_api_key: Optional[str] = Header(None)):
-    """
-    Send a chat request to a trained model
-    """
-    # Set API key if provided
-    api_key = x_api_key or os.getenv("TINKER_API_KEY")
-    if api_key:
-        os.environ["TINKER_API_KEY"] = api_key
 
-    # Determine if model_name is a checkpoint path or base model
-    # If it starts with "tinker://", it's a checkpoint path
-    if request.model_name.startswith("tinker://"):
-        # Extract base model from saved models or use default
-        # For now, we'll need to find the base model from saved models
-        from .models import saved_models
-        saved_model = next((m for m in saved_models if m.get("checkpoint_path") == request.model_name), None)
-        base_model = saved_model["base_model"] if saved_model else "meta-llama/Llama-3.2-1B"
-        checkpoint_path = request.model_name
-    else:
-        # It's a base model name
-        base_model = request.model_name
-        checkpoint_path = None
+async def _generate(model: str, messages: list[dict], max_tokens: int, temperature: float, api_key: str) -> str:
+    _, types, _ = engine.load_sdk()
+    sampling_client, renderer, tokenizer = await _get_sampler(model, api_key)
+    prompt = renderer.build_generation_prompt(messages)
+    params = types.SamplingParams(max_tokens=max_tokens, temperature=temperature,
+                                  stop=renderer.get_stop_sequences())
+    resp = await sampling_client.sample_async(prompt=prompt, num_samples=1, sampling_params=params)
+    seq = resp.sequences[0]
+    toks = seq.tokens() if callable(getattr(seq, "tokens", None)) else list(seq.tokens)
+    return tokenizer.decode(toks)
 
-    # Initialize agent with appropriate model/checkpoint
-    agent = CodeReviewAgent(base_model=base_model, checkpoint_path=checkpoint_path)
-    
-    # Reuse the agent's sampling logic (we might want to expose a cleaner chat method on the agent later)
-    # For now, we'll construct a prompt from messages
-    prompt_text = "\n".join([f"{m.role}: {m.content}" for m in request.messages])
-    
-    # We'll use the review_code method's internal logic but adapted
-    # Since review_code is specific, let's just use the agent's client if available
-    client = await agent._get_sampling_client()
-    
-    if client:
-        try:
-            from tinker import types
-            # Get tokenizer from the agent (it comes from TrainingClient, not SamplingClient)
-            tokenizer = agent.get_tokenizer()
-            if not tokenizer:
-                raise Exception("Tokenizer not available - TrainingClient may not be initialized")
-            prompt = types.ModelInput.from_ints(tokenizer.encode(prompt_text))
-            params = types.SamplingParams(max_tokens=request.max_tokens, temperature=request.temperature)
 
-            # Use the proper sample() method on SamplingClient
-            # The sync version returns a future, we call .result() to get the actual result
-            future = client.sample(prompt=prompt, sampling_params=params, num_samples=1)
-            result = future.result()
+@router.post("/message")
+async def chat(req: ChatRequest, x_api_key: Optional[str] = Header(None)):
+    api_key = get_tinker_api_key(x_api_key)
+    if not api_key:
+        raise HTTPException(401, "No Tinker API key. Add it in Settings to chat with a model.")
+    messages = [m.dict() for m in req.messages] or ([{"role": "user", "content": req.prompt}] if req.prompt else [])
+    if not messages:
+        raise HTTPException(400, "Provide a message or prompt.")
+    try:
+        text = await _generate(req.model, messages, req.max_tokens, req.temperature, api_key)
+        return {"model": req.model, "response": text}
+    except HTTPException:
+        raise
+    except Exception as e:
+        reason = getattr(e, "message", None) or str(e)
+        logger.error(f"Chat failed: {reason}")
+        raise HTTPException(502, f"Generation failed: {reason}")
 
-            # Extract tokens from result - structure is result.sequences[0].tokens
-            output_tokens = result.sequences[0].tokens
-            response_text = tokenizer.decode(output_tokens)
 
-            return ChatResponse(
-                response=response_text,
-                model=request.model_name,
-                tokens_used=len(output_tokens)
-            )
-        except Exception as e:
-            error_msg = str(e)
-            print(f"Chat completion failed: {error_msg}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Model inference failed: {error_msg}. Please check your API key and model availability."
-            )
+class CompareRequest(BaseModel):
+    base_model: str
+    trained_model: str
+    prompt: str
+    max_tokens: int = 512
+    temperature: float = 0.7
 
-    # If no client available
-    raise HTTPException(
-        status_code=503,
-        detail="Tinker SDK client unavailable. Please verify your API key is set correctly in settings."
-    )
+    model_config = {"protected_namespaces": ()}
 
-@router.post("/review-code")
-async def review_code(code: str, language: str = "python", model_name: str = "code-reviewer-v1", x_api_key: Optional[str] = Header(None)):
-    """
-    Specialized endpoint for code review
-    """
-    # Set API key if provided
-    api_key = x_api_key or os.getenv("TINKER_API_KEY")
-    if api_key:
-        os.environ["TINKER_API_KEY"] = api_key
 
-    # Determine if model_name is a checkpoint path or base model
-    if model_name.startswith("tinker://"):
-        from .models import saved_models
-        saved_model = next((m for m in saved_models if m.get("checkpoint_path") == model_name), None)
-        base_model = saved_model["base_model"] if saved_model else "meta-llama/Llama-3.2-1B"
-        checkpoint_path = model_name
-    else:
-        base_model = model_name
-        checkpoint_path = None
+@router.post("/compare")
+async def compare(req: CompareRequest, x_api_key: Optional[str] = Header(None)):
+    """Base model vs. your fine-tuned model, side by side."""
+    api_key = get_tinker_api_key(x_api_key)
+    if not api_key:
+        raise HTTPException(401, "No Tinker API key. Add it in Settings.")
+    messages = [{"role": "user", "content": req.prompt}]
+    try:
+        base = await _generate(req.base_model, messages, req.max_tokens, req.temperature, api_key)
+        tuned = await _generate(req.trained_model, messages, req.max_tokens, req.temperature, api_key)
+        return {"prompt": req.prompt, "base": {"model": req.base_model, "response": base},
+                "tuned": {"model": req.trained_model, "response": tuned}}
+    except Exception as e:
+        raise HTTPException(502, f"Comparison failed: {getattr(e, 'message', None) or e}")
 
-    agent = CodeReviewAgent(base_model=base_model, checkpoint_path=checkpoint_path)
-    result = await agent.review_code(code, language)
 
-    return {
-        "review": result["review"],
-        "model": model_name
-    }
+# --- Human feedback -> preference data (RLHF loop) ---------------------------
+
+class FeedbackRequest(BaseModel):
+    prompt: str
+    chosen: str
+    rejected: str
+    source: str = "playground"
+
 
 @router.post("/feedback")
-async def submit_feedback(
-    review_id: str,
-    rating: int,
-    comments: Optional[str] = None
-):
-    """
-    Submit feedback on a code review (for RLHF training)
-    """
-    # This will be used to collect preference data for reward model training
-    return {
-        "message": "Feedback recorded successfully",
-        "review_id": review_id,
-        "will_improve_model": True
-    }
+async def add_feedback(req: FeedbackRequest):
+    db.add_preference({"id": f"pref_{uuid.uuid4().hex[:10]}", "prompt": req.prompt,
+                       "chosen": req.chosen, "rejected": req.rejected,
+                       "source": req.source, "created_at": _now()})
+    return {"message": "Feedback saved", "count": db.count_preferences()}
+
+
+@router.get("/feedback")
+async def list_feedback():
+    return {"preferences": db.list_preferences(), "count": db.count_preferences()}
+
+
+class ToDatasetRequest(BaseModel):
+    name: str = "playground-preferences"
+
+
+@router.post("/feedback/to-dataset")
+async def feedback_to_dataset(req: ToDatasetRequest):
+    """Turn collected 👍/👎 feedback into a DPO-ready dataset."""
+    import json
+    prefs = db.list_preferences()
+    if not prefs:
+        raise HTTPException(400, "No feedback collected yet. Rate some responses in the Playground first.")
+    dataset_id = str(uuid.uuid4())
+    path = str(DATASETS_DIR / f"{dataset_id}_{req.name.strip().replace(' ', '_')[:40] or 'preferences'}.jsonl")
+    with open(path, "w", encoding="utf-8") as f:
+        for p in prefs:
+            f.write(json.dumps({"prompt": p["prompt"], "chosen": p["chosen"], "rejected": p["rejected"]}) + "\n")
+    num = len(prefs)
+    rec = {"id": dataset_id, "name": req.name, "source": "feedback", "training_type": "dpo",
+           "format": "jsonl", "path": path, "num_samples": num, "size_bytes": os.path.getsize(path),
+           "columns": ["prompt", "chosen", "rejected"],
+           "split": {"train": num, "validation": 0, "test": 0},
+           "schema_ok": True, "schema_notes": [], "meta": {"from": "feedback"}, "created_at": _now()}
+    return {"message": f"Created a preference dataset from {num} ratings", "dataset": db.add_dataset(rec)}

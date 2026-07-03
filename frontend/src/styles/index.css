@@ -3,174 +3,114 @@
 @tailwind utilities;
 
 @layer base {
-  * {
-    @apply border-obsidian-border;
-  }
+  :root { color-scheme: light; }
+
+  html, body, #root { height: 100%; }
 
   body {
-    @apply bg-obsidian-bg text-tactical-text-primary font-sans antialiased;
+    @apply bg-canvas text-ink font-sans antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "ss01";
   }
 
-  code {
-    @apply font-mono;
+  h1, h2, h3, h4 {
+    font-family: "Bricolage Grotesque", Inter, system-ui, sans-serif;
+    letter-spacing: -0.01em;
   }
 
-  /* Tactical scrollbar */
-  ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+  code, kbd, pre { @apply font-mono; }
+
+  ::selection { background: rgba(255, 107, 26, 0.24); }
+
+  /* Focus ring — orange, visible, keyboard-friendly */
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(255, 107, 26, 0.28);
+    border-radius: 8px;
   }
 
-  ::-webkit-scrollbar-track {
-    @apply bg-obsidian-surface;
-  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-line-strong rounded-full; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: #c9bfb1; }
 
-  ::-webkit-scrollbar-thumb {
-    @apply bg-obsidian-border rounded-tactical-sm;
-    border: 1px solid rgba(0, 217, 255, 0.1);
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    @apply bg-obsidian-hover;
-    border-color: rgba(0, 217, 255, 0.3);
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
   }
 }
 
 @layer components {
-  /* Tactical LED Indicators - Full spectrum */
-  .led {
-    @apply w-2 h-2 rounded-full inline-block animate-pulse-slow;
-  }
+  /* --- Surfaces --- */
+  .card { @apply bg-paper border border-line rounded-xl2 shadow-card; }
+  .card-flat { @apply bg-paper border border-line rounded-xl2; }
+  .card-pad { @apply p-5; }
 
-  .led-cyan { @apply bg-led-cyan; box-shadow: 0 0 8px theme('colors.led.cyan'); }
-  .led-blue { @apply bg-led-blue; box-shadow: 0 0 8px theme('colors.led.blue'); }
-  .led-purple { @apply bg-led-purple; box-shadow: 0 0 8px theme('colors.led.purple'); }
-  .led-magenta { @apply bg-led-magenta; box-shadow: 0 0 8px theme('colors.led.magenta'); }
-  .led-red { @apply bg-led-red; box-shadow: 0 0 8px theme('colors.led.red'); }
-  .led-orange { @apply bg-led-orange; box-shadow: 0 0 8px theme('colors.led.orange'); }
-  .led-yellow { @apply bg-led-yellow; box-shadow: 0 0 8px theme('colors.led.yellow'); }
-  .led-lime { @apply bg-led-lime; box-shadow: 0 0 8px theme('colors.led.lime'); }
-  .led-green { @apply bg-led-green; box-shadow: 0 0 8px theme('colors.led.green'); }
-  .led-emerald { @apply bg-led-emerald; box-shadow: 0 0 8px theme('colors.led.emerald'); }
-  .led-teal { @apply bg-led-teal; box-shadow: 0 0 8px theme('colors.led.teal'); }
-
-  /* Obsidian Widget Panels */
-  .tactical-panel {
-    @apply bg-obsidian-surface/90 backdrop-blur-tactical border border-obsidian-border rounded-tactical shadow-tactical;
-    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.02), transparent);
-  }
-
-  .tactical-panel-header {
-    @apply px-4 py-2.5 border-b border-obsidian-border flex items-center justify-between;
-    background: linear-gradient(to right, rgba(0, 217, 255, 0.03), transparent);
-  }
-
-  .tactical-panel-elevated {
-    @apply bg-obsidian-elevated/90 backdrop-blur-tactical border border-obsidian-border rounded-tactical-lg shadow-tactical-lg;
-  }
-
-  /* Tactical Buttons */
+  /* --- Buttons --- */
   .btn {
-    @apply px-4 py-2 rounded-tactical-sm font-medium transition-all duration-200 relative overflow-hidden;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl font-semibold text-sm
+           px-4 py-2.5 transition-all duration-150 select-none whitespace-nowrap
+           disabled:opacity-50 disabled:pointer-events-none active:scale-[0.98];
+  }
+  .btn-primary { @apply bg-orange text-white shadow-sm hover:bg-orange-deep; }
+  .btn-dark { @apply bg-charcoal text-white hover:bg-charcoal-soft; }
+  .btn-outline { @apply bg-paper text-ink border border-line-strong hover:border-ink/30 hover:bg-raised; }
+  .btn-ghost { @apply text-ink-soft hover:text-ink hover:bg-line-soft; }
+  .btn-danger { @apply bg-berry text-white hover:brightness-95; }
+  .btn-soft { @apply bg-orange-soft text-orange-ink hover:bg-orange-softer border border-orange/20; }
+  .btn-lg { @apply text-base px-5 py-3 rounded-xl2; }
+  .btn-sm { @apply text-[13px] px-3 py-1.5 rounded-lg; }
+  .btn-xs { @apply text-xs px-2.5 py-1 rounded-lg gap-1; }
+  .btn-icon { @apply p-2 rounded-lg; }
+
+  /* --- Form controls --- */
+  .label { @apply block text-[13px] font-semibold text-ink-soft mb-1.5; }
+  .input {
+    @apply w-full bg-paper border border-line-strong rounded-xl px-3.5 py-2.5 text-sm text-ink
+           placeholder:text-ink-mute transition-colors
+           focus:border-orange focus:shadow-focus focus:outline-none;
+  }
+  textarea.input { @apply leading-relaxed; }
+  select.input { @apply cursor-pointer pr-8; }
+  .hint { @apply text-xs text-ink-mute mt-1.5 leading-relaxed; }
+
+  /* --- Badges / chips --- */
+  .badge { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+  .badge-neutral { @apply bg-line-soft text-ink-soft; }
+  .badge-orange { @apply bg-orange-soft text-orange-ink; }
+  .badge-dark { @apply bg-charcoal text-white; }
+  .badge-berry { @apply bg-berry-soft text-berry-ink; }
+  .badge-amber { @apply bg-amber-soft text-amber-ink; }
+  .badge-outline { @apply border border-line-strong text-ink-soft; }
+
+  /* --- Segmented control --- */
+  .segmented { @apply inline-flex bg-line-soft rounded-xl p-1 gap-1; }
+  .segmented-item { @apply px-3.5 py-1.5 rounded-lg text-sm font-semibold text-ink-soft cursor-pointer transition-colors hover:text-ink; }
+  .segmented-item[data-active="true"] { @apply bg-paper text-ink shadow-card; }
+
+  /* --- Progress --- */
+  .progress { @apply h-2 bg-line rounded-full overflow-hidden; }
+  .progress > span { @apply block h-full bg-orange rounded-full transition-[width] duration-500 ease-out; }
+
+  /* --- Dotted status --- */
+  .dot { @apply inline-block w-2 h-2 rounded-full; }
+
+  /* --- Skeleton shimmer --- */
+  .skeleton { @apply relative overflow-hidden bg-line-soft rounded-lg; }
+  .skeleton::after {
+    content: ''; @apply absolute inset-0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
+    transform: translateX(-100%); animation: shimmer 1.5s infinite;
+  }
+  @keyframes shimmer { 100% { transform: translateX(100%); } }
+
+  /* --- Info tip trigger --- */
+  .infotip-trigger {
+    @apply inline-flex items-center justify-center w-4 h-4 rounded-full bg-line text-ink-mute
+           text-[10px] font-bold cursor-help align-middle hover:bg-orange-soft hover:text-orange-ink transition-colors;
   }
 
-  .btn-primary {
-    @apply bg-tactical-primary/20 hover:bg-tactical-primary/30 text-tactical-primary border border-tactical-primary/50 hover:border-tactical-primary hover:shadow-glow-cyan;
-  }
+  /* --- Underlined glossary term --- */
+  .term { @apply border-b border-dashed border-orange/50 cursor-help text-ink; }
 
-  .btn-secondary {
-    @apply bg-tactical-secondary/20 hover:bg-tactical-secondary/30 text-tactical-secondary border border-tactical-secondary/50 hover:border-tactical-secondary hover:shadow-glow-purple;
-  }
-
-  .btn-ghost {
-    @apply hover:bg-obsidian-hover text-tactical-text-secondary hover:text-tactical-text-primary border border-transparent hover:border-obsidian-border;
-  }
-
-  .btn-danger {
-    @apply bg-led-red/20 hover:bg-led-red/30 text-led-red border border-led-red/50 hover:border-led-red hover:shadow-glow-red;
-  }
-
-  .btn-success {
-    @apply bg-led-green/20 hover:bg-led-green/30 text-led-green border border-led-green/50 hover:border-led-green hover:shadow-glow-green;
-  }
-
-  .btn-sm {
-    @apply px-3 py-1.5 text-sm;
-  }
-
-  .btn-xs {
-    @apply px-2 py-1 text-xs;
-  }
-
-  /* Tactical Inputs */
-  .input-tactical {
-    @apply bg-obsidian-surface/50 border border-obsidian-border rounded-tactical-sm px-3 py-2 text-tactical-text-primary placeholder-tactical-text-muted;
-    @apply focus:outline-none focus:ring-1 focus:ring-tactical-primary/50 focus:border-tactical-primary/50 transition-all;
-  }
-
-  .input-tactical option {
-    @apply bg-obsidian-elevated text-tactical-text-primary;
-  }
-
-  .input-field {
-    @apply w-full input-tactical text-sm;
-  }
-
-  select.input-tactical {
-    cursor: pointer;
-  }
-
-  /* Tactical Widget Cards */
-  .tactical-widget {
-    @apply tactical-panel p-4 hover:border-tactical-primary/30 transition-all duration-300;
-  }
-
-  .tactical-widget-glow {
-    @apply tactical-panel p-4 border-tactical-primary/30 shadow-inner-glow hover:shadow-glow-cyan transition-all duration-300;
-  }
-
-  /* Tactical Stat Card */
-  .stat-card {
-    @apply tactical-panel p-4 relative;
-  }
-
-  .stat-card::before {
-    content: '';
-    @apply absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-tactical-primary to-transparent rounded-l-tactical;
-  }
-
-  /* Terminal Style */
-  .terminal {
-    @apply bg-black/80 backdrop-blur-tactical border border-obsidian-border rounded-tactical p-3 font-mono text-sm;
-    @apply text-led-cyan;
-  }
-
-  .terminal-output {
-    @apply text-tactical-text-secondary text-xs font-mono leading-relaxed;
-  }
-
-  /* Progress Bar */
-  .progress-bar {
-    @apply h-1.5 bg-obsidian-hover rounded-full overflow-hidden relative;
-  }
-
-  .progress-fill {
-    @apply h-full bg-gradient-to-r from-tactical-primary to-tactical-accent transition-all duration-500;
-    box-shadow: 0 0 10px rgba(0, 217, 255, 0.5);
-  }
-
-  /* Glow Text */
-  .text-glow-cyan {
-    text-shadow: 0 0 10px rgba(0, 217, 255, 0.6);
-  }
-
-  .text-glow-purple {
-    text-shadow: 0 0 10px rgba(168, 85, 247, 0.6);
-  }
-}
-
-@layer utilities {
-  .text-glow {
-    text-shadow: 0 0 10px rgba(24, 144, 255, 0.5);
-  }
+  /* --- Link --- */
+  .link { @apply text-orange-ink font-medium hover:underline underline-offset-2; }
 }

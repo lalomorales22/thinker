@@ -1,28 +1,36 @@
 """
-Thinker Backend - FastAPI server for Self-Evolving Code Review Agent
+Thinker Backend — FastAPI server.
+
+A friendly studio over the Tinker fine-tuning SDK: supervised, preference (DPO),
+and reinforcement learning, with HuggingFace dataset import wired straight into
+training, a live model catalog, and honest job/metric reporting (no fake data).
 """
 import os
+# Torch + the Tinker SDK can each link a copy of libomp; on macOS that aborts the
+# process with "OMP: Error #15" unless we allow the duplicate. Set before any
+# import that may pull torch/tinker.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 import warnings
-# Suppress Pydantic warnings from Tinker SDK
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from contextlib import asynccontextmanager
+from typing import Optional
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from contextlib import asynccontextmanager
-import socketio
 import uvicorn
-from typing import List
-import asyncio
 
+import db
+import catalog
+from config import get_tinker_api_key, mask_key
+from events import hub
 from routes import training, models, chat, datasets, analytics, assistant, huggingface
-from agents.code_review_agent import CodeReviewAgent
 from utils import (
     logger,
     ThinkerException,
@@ -32,50 +40,29 @@ from utils import (
     general_exception_handler,
 )
 
-# WebSocket manager
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
-
-    async def broadcast(self, message: dict):
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except:
-                pass
-
-manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("🧠 Thinker Backend Starting...")
-    api_key_status = '✓ Set' if os.getenv('TINKER_API_KEY') else '✗ Missing'
-    logger.info(f"Tinker API Key: {api_key_status}")
-
-    if not os.getenv('TINKER_API_KEY'):
-        logger.warning("Tinker API key not set. Training features will require API key header.")
-
+    logger.info("🧠 Thinker backend starting…")
+    db.init_db()
+    key = get_tinker_api_key()
+    logger.info(f"Tinker API key: {'set (' + mask_key(key) + ')' if key else 'NOT set'}")
+    try:
+        cat = await catalog.get_catalog(refresh=True)
+        logger.info(f"Model catalog: {len(cat['models'])} models ({cat['source']})")
+    except Exception as e:
+        logger.warning(f"Model catalog warm-up failed: {e}")
     yield
+    logger.info("🧠 Thinker backend shutting down…")
 
-    # Shutdown
-    logger.info("🧠 Thinker Backend Shutting Down...")
 
 app = FastAPI(
     title="Thinker API",
-    description="Self-Evolving Code Review Agent powered by Tinker",
-    version="1.0.0",
-    lifespan=lifespan
+    description="A friendly studio for fine-tuning open models with Tinker",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -84,15 +71,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register exception handlers
 app.add_exception_handler(ThinkerException, thinker_exception_handler)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, general_exception_handler)
 
-logger.info("Exception handlers registered")
-
-# Include routers
 app.include_router(training.router, prefix="/api/training", tags=["training"])
 app.include_router(models.router, prefix="/api/models", tags=["models"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
@@ -101,48 +84,43 @@ app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"]
 app.include_router(assistant.router, prefix="/api/assistant", tags=["assistant"])
 app.include_router(huggingface.router, prefix="/api/huggingface", tags=["huggingface"])
 
+
 @app.get("/")
 async def root():
-    return {
-        "app": "Thinker",
-        "version": "1.0.0",
-        "status": "running",
-        "made_by": "lalo ❤️"
-    }
+    return {"app": "Thinker", "version": "2.0.0", "status": "running"}
+
 
 @app.get("/api/health")
-async def health():
+async def health(x_api_key: Optional[str] = Header(None)):
+    """Honest health: real key presence, SDK availability, and catalog source."""
+    from training.engine import check_tinker
+    key = get_tinker_api_key(x_api_key)
+    sdk = check_tinker()
+    cat = await catalog.get_catalog()
     return {
         "status": "healthy",
-        "tinker_api_key": "set" if os.getenv("TINKER_API_KEY") else "missing"
+        "tinker_api_key": bool(key),
+        "tinker_sdk": sdk,
+        "catalog_source": cat["source"],
+        "catalog_count": len(cat["models"]),
+        "ws_clients": hub.count,
     }
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
-    logger.info(f"WebSocket client connected. Total connections: {len(manager.active_connections)}")
-
+    await hub.connect(websocket)
     try:
+        await websocket.send_json({"type": "hello", "data": {"message": "connected"}})
         while True:
-            data = await websocket.receive_json()
-            logger.debug(f"WebSocket received: {data}")
-            # Echo back for now - will handle training updates
-            await manager.broadcast({
-                "type": "update",
-                "data": data
-            })
+            # Keep the socket open; clients don't need to send anything.
+            await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        logger.info(f"WebSocket client disconnected. Total connections: {len(manager.active_connections)}")
+        hub.disconnect(websocket)
     except Exception as e:
-        logger.error(f"WebSocket error: {str(e)}", exc_info=True)
-        manager.disconnect(websocket)
+        logger.error(f"WebSocket error: {e}")
+        hub.disconnect(websocket)
+
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
