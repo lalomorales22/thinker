@@ -19,7 +19,8 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from typing import Optional
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -90,10 +91,10 @@ async def root():
 
 
 @app.get("/api/health")
-async def health():
+async def health(x_api_key: Optional[str] = Header(None)):
     """Honest health: real key presence, SDK availability, and catalog source."""
     from training.engine import check_tinker
-    key = get_tinker_api_key()
+    key = get_tinker_api_key(x_api_key)
     sdk = check_tinker()
     cat = await catalog.get_catalog()
     return {
