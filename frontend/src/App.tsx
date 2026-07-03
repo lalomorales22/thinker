@@ -1,221 +1,101 @@
 import { useState } from 'react'
-import {
-  Brain,
-  Settings,
-  Zap,
-  Package,
-  Database,
-  MessageSquare,
-  BarChart3,
-  Terminal as TerminalIcon,
-  Bot,
-  X,
-  Minimize2
-} from 'lucide-react'
-import { useStore } from './store/useStore'
-import SettingsModal from './components/SettingsModal'
-import AITrainingAssistant from './components/AITrainingAssistant'
+import { Home, Sparkles, Database, Boxes, MessageSquare, BarChart3, Swords, Settings as SettingsIcon, HelpCircle, Wifi, WifiOff } from 'lucide-react'
+import { useStore, ViewType } from './store/useStore'
+import { useLiveConnection } from './lib/hooks'
+import { cn } from './lib/util'
+import { Toaster } from './components/ui'
+import { ThinkerMark, Wordmark } from './components/Brand'
 import ErrorBoundary from './components/ErrorBoundary'
-import TrainingDashboard from './views/TrainingDashboard'
-import ModelsLibrary from './views/ModelsLibrary'
-import DatasetManager from './views/DatasetManager'
+import SettingsModal from './components/SettingsModal'
+import Assistant from './components/Assistant'
+import Onboarding from './components/Onboarding'
+
+import HomeView from './views/Home'
+import Train from './views/Train'
+import Data from './views/Data'
+import Models from './views/Models'
 import Playground from './views/Playground'
 import Analytics from './views/Analytics'
-import MultiAgentArena from './views/MultiAgentArena'
+import Arena from './views/Arena'
 
-function App() {
+const NAV: { id: ViewType; label: string; icon: any; hint: string }[] = [
+  { id: 'home', label: 'Home', icon: Home, hint: 'Start here' },
+  { id: 'train', label: 'Train', icon: Sparkles, hint: 'Fine-tune a model' },
+  { id: 'data', label: 'Data', icon: Database, hint: 'Datasets & imports' },
+  { id: 'models', label: 'Models', icon: Boxes, hint: 'Your trained models' },
+  { id: 'playground', label: 'Playground', icon: MessageSquare, hint: 'Chat & compare' },
+  { id: 'analytics', label: 'Analytics', icon: BarChart3, hint: 'Runs & metrics' },
+  { id: 'arena', label: 'Arena', icon: Swords, hint: 'Multi-agent RL' },
+]
+
+const VIEWS: Record<ViewType, () => JSX.Element> = {
+  home: HomeView, train: Train, data: Data, models: Models,
+  playground: Playground, analytics: Analytics, arena: Arena,
+}
+
+export default function App() {
+  const { view, setView, seenWelcome } = useStore()
   const [showSettings, setShowSettings] = useState(false)
-  const [showTerminal, setShowTerminal] = useState(true)
-  const [showAssistant, setShowAssistant] = useState(true)
-  const [terminalHeight] = useState(200)
-  const [assistantWidth] = useState(320)
-  const { currentView, setCurrentView } = useStore()
-
-  const [terminalLogs] = useState([
-    { type: 'system', text: '> Thinker v1.0.0 initialized', timestamp: '10:30:45' },
-    { type: 'info', text: '> WebSocket connected to ws://localhost:8000', timestamp: '10:30:46' },
-    { type: 'success', text: '> Tinker SDK ready', timestamp: '10:30:47' },
-    { type: 'prompt', text: '>', timestamp: '10:30:48' }
-  ])
-
-  const views = [
-    { id: 'training' as const, icon: Zap, label: 'Training', component: TrainingDashboard, led: 'cyan' },
-    { id: 'models' as const, icon: Package, label: 'Models', component: ModelsLibrary, led: 'purple' },
-    { id: 'datasets' as const, icon: Database, label: 'Datasets', component: DatasetManager, led: 'teal' },
-    { id: 'playground' as const, icon: MessageSquare, label: 'Playground', component: Playground, led: 'blue' },
-    { id: 'analytics' as const, icon: BarChart3, label: 'Analytics', component: Analytics, led: 'emerald' },
-    { id: 'multiagent' as const, icon: Bot, label: 'Multi-Agent', component: MultiAgentArena, led: 'purple' },
-  ]
-
-  const CurrentViewComponent = views.find(v => v.id === currentView)?.component || TrainingDashboard
-  const currentViewData = views.find(v => v.id === currentView)
+  const [showAssistant, setShowAssistant] = useState(false)
+  const connected = useLiveConnection()
+  const Current = VIEWS[view]
 
   return (
     <ErrorBoundary>
-      <div className="h-screen w-screen flex flex-col bg-obsidian-bg text-tactical-text-primary overflow-hidden">
-      {/* Top Bar - Tactical Header */}
-      <div className="h-11 bg-obsidian-surface/80 backdrop-blur-tactical border-b border-obsidian-border flex items-center justify-between px-4">
-        <div className="flex items-center gap-3">
-          <Brain className="w-5 h-5 text-tactical-primary text-glow-cyan" />
-          <span className="font-display font-semibold text-base tracking-wide">THINKER</span>
-          <span className="led led-cyan"></span>
-          <span className="text-xs text-tactical-text-muted font-mono">v1.0.0</span>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <span className={`led led-${currentViewData?.led || 'cyan'}`}></span>
-            <span className="text-xs text-tactical-text-secondary uppercase tracking-wider">
-              {currentViewData?.label}
-            </span>
+      <div className="h-screen w-screen flex overflow-hidden bg-canvas text-ink">
+        {/* Sidebar */}
+        <aside className="w-[236px] shrink-0 flex flex-col border-r border-line bg-paper">
+          <div className="h-16 flex items-center gap-2.5 px-5 border-b border-line">
+            <ThinkerMark />
+            <div className="leading-tight">
+              <Wordmark className="text-lg" />
+              <div className="text-[11px] text-ink-mute -mt-0.5">fine-tune your own AI</div>
+            </div>
           </div>
 
-          <div className="flex items-center gap-1">
-            <button
-              className="btn btn-ghost btn-xs p-1.5"
-              onClick={() => setShowAssistant(!showAssistant)}
-              title="Toggle AI Assistant"
-            >
-              <Bot className="w-4 h-4" />
+          <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+            {NAV.map((item) => {
+              const active = view === item.id
+              return (
+                <button key={item.id} onClick={() => setView(item.id)}
+                  className={cn('w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors group',
+                    active ? 'bg-orange-soft text-orange-ink' : 'text-ink-soft hover:bg-line-soft hover:text-ink')}>
+                  <item.icon className={cn('w-[18px] h-[18px]', active ? 'text-orange' : 'text-ink-mute group-hover:text-ink-soft')} />
+                  <span>{item.label}</span>
+                  {active && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-orange" />}
+                </button>
+              )
+            })}
+          </nav>
+
+          <div className="p-3 border-t border-line space-y-1">
+            <button onClick={() => setShowAssistant(true)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-ink-soft hover:bg-line-soft hover:text-ink transition-colors">
+              <HelpCircle className="w-[18px] h-[18px] text-ink-mute" /> Ask the assistant
             </button>
-            <button
-              className="btn btn-ghost btn-xs p-1.5"
-              onClick={() => setShowTerminal(!showTerminal)}
-              title="Toggle Terminal"
-            >
-              <TerminalIcon className="w-4 h-4" />
+            <button onClick={() => setShowSettings(true)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-ink-soft hover:bg-line-soft hover:text-ink transition-colors">
+              <SettingsIcon className="w-[18px] h-[18px] text-ink-mute" /> Settings
             </button>
-            <button
-              className="btn btn-ghost btn-xs p-1.5"
-              onClick={() => setShowSettings(true)}
-            >
-              <Settings className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-2 px-3 pt-2 text-[11px] text-ink-mute">
+              {connected ? <Wifi className="w-3.5 h-3.5 text-orange" /> : <WifiOff className="w-3.5 h-3.5" />}
+              {connected ? 'Live' : 'Offline'}
+            </div>
           </div>
-        </div>
+        </aside>
+
+        {/* Main */}
+        <main className="flex-1 min-w-0 overflow-y-auto">
+          <div className="max-w-6xl mx-auto px-8 py-8">
+            <Current />
+          </div>
+        </main>
+
+        {showAssistant && <Assistant onClose={() => setShowAssistant(false)} onOpenSettings={() => { setShowAssistant(false); setShowSettings(true) }} />}
+        {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+        {!seenWelcome && <Onboarding onOpenSettings={() => setShowSettings(true)} />}
+        <Toaster />
       </div>
-
-      {/* Main Layout - IDE Style */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Far Left Icon Sidebar */}
-        <div className="w-16 bg-obsidian-surface/50 backdrop-blur-tactical border-r border-obsidian-border flex flex-col items-center gap-1 py-4">
-          {views.map((view) => (
-            <div key={view.id} className="relative group">
-              <button
-                className={`p-2 hover:bg-obsidian-hover rounded-tactical transition-all duration-200 flex flex-col items-center gap-0.5 w-14 ${
-                  currentView === view.id ? 'bg-obsidian-elevated shadow-inner-glow' : ''
-                }`}
-                title={view.label}
-                onClick={() => setCurrentView(view.id)}
-              >
-                <view.icon
-                  className={`w-5 h-5 transition-colors ${
-                    currentView === view.id ? `text-led-${view.led}` : 'text-tactical-text-muted'
-                  }`}
-                />
-                <span className={`text-[9px] font-medium transition-colors ${currentView === view.id ? `text-led-${view.led}` : 'text-tactical-text-muted'}`}>
-                  {view.id === 'training' ? 'Train' : view.id === 'models' ? 'Models' : view.id === 'datasets' ? 'Data' : view.id === 'playground' ? 'Chat' : view.id === 'analytics' ? 'Stats' : view.id === 'multiagent' ? 'Arena' : view.label}
-                </span>
-                {currentView === view.id && (
-                  <div className="absolute left-0 top-0 w-1 h-full bg-tactical-primary rounded-r"></div>
-                )}
-              </button>
-              <span className={`led led-${view.led} absolute -top-0.5 -right-0.5 opacity-0 group-hover:opacity-100 transition-opacity`}></span>
-            </div>
-          ))}
-        </div>
-
-        {/* Main Content + Right Sidebar */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 flex overflow-hidden">
-            {/* Main Content Area */}
-            <div className="flex-1 overflow-hidden">
-              <CurrentViewComponent />
-            </div>
-
-            {/* Right Sidebar - AI Assistant */}
-            {showAssistant && (
-              <div
-                className="bg-obsidian-surface/80 backdrop-blur-tactical border-l border-obsidian-border flex flex-col"
-                style={{ width: `400px` }}
-              >
-                <div className="tactical-panel-header">
-                  <div className="flex items-center gap-2">
-                    <span className="led led-purple"></span>
-                    <span className="text-xs font-semibold uppercase tracking-wider">AI Training Assistant</span>
-                  </div>
-                  <button
-                    className="btn btn-ghost btn-xs p-1"
-                    onClick={() => setShowAssistant(false)}
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                <div className="flex-1 overflow-hidden">
-                  <AITrainingAssistant />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Bottom Terminal Panel */}
-          {showTerminal && (
-            <div
-              className="border-t border-obsidian-border bg-obsidian-surface/90 backdrop-blur-tactical flex flex-col"
-              style={{ height: `${terminalHeight}px` }}
-            >
-              <div className="tactical-panel-header cursor-ns-resize">
-                <div className="flex items-center gap-2">
-                  <span className="led led-green"></span>
-                  <span className="text-xs font-semibold uppercase tracking-wider">Terminal</span>
-                  <span className="text-xs text-tactical-text-muted font-mono">localhost:8000</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <button className="btn btn-ghost btn-xs p-1">
-                    <Minimize2 className="w-3 h-3" />
-                  </button>
-                  <button
-                    className="btn btn-ghost btn-xs p-1"
-                    onClick={() => setShowTerminal(false)}
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-3 font-mono text-xs bg-black/40">
-                {terminalLogs.map((log, idx) => (
-                  <div key={idx} className="leading-relaxed">
-                    <span className="text-tactical-text-muted">[{log.timestamp}]</span>{' '}
-                    <span className={
-                      log.type === 'system' ? 'text-led-cyan' :
-                      log.type === 'info' ? 'text-led-blue' :
-                      log.type === 'success' ? 'text-led-green' :
-                      log.type === 'error' ? 'text-led-red' :
-                      'text-tactical-text-primary'
-                    }>
-                      {log.text}
-                    </span>
-                  </div>
-                ))}
-                <div className="flex items-center mt-1">
-                  <span className="text-led-cyan mr-2">❯</span>
-                  <span className="animate-pulse">_</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Settings Modal */}
-      {showSettings && (
-        <SettingsModal onClose={() => setShowSettings(false)} />
-      )}
-    </div>
     </ErrorBoundary>
   )
 }
-
-export default App

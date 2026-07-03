@@ -1,342 +1,305 @@
-import { TrendingUp, Activity, Award, Target, BarChart3, LineChart } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { BarChart3, RefreshCw, Eye, EyeOff, ArrowRight } from 'lucide-react'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { api } from '../lib/api'
+import { useAsync } from '../lib/hooks'
 import { useStore } from '../store/useStore'
+import { cn, fmtInt, fmtNum, relTime, TRAINING_TYPES, statusStyle } from '../lib/util'
+import { Card, Stat, Badge, Button, EmptyState, Skeleton, Spinner } from '../components/ui'
+import { InfoTip } from '../lib/glossary'
 
-interface MetricCard {
-  label: string
-  value: string | number
-  change: string
-  changeType: 'positive' | 'negative' | 'neutral'
-  icon: any
-}
-
-interface TrainingRun {
+// --- Shapes returned by the analytics endpoints ----------------------------
+interface OverviewCard { label: string; value: string | number; hint?: string }
+interface Overview { cards: OverviewCard[]; by_status: Record<string, number> }
+interface Run {
+  id: string
   name: string
-  loss: number | null
-  reward: number | null
-  accuracy: number | null
+  kind: string
+  base_model: string
+  dataset_id: string | null
+  status: string
   steps: number
+  total_steps: number
+  loss: number | null
+  mode: string | null
+  duration: string
+  created_at: string
+}
+interface SeriesPoint {
+  step: number
+  loss?: number | null
+  reward_mean?: number | null
+  reward_margin?: number | null
+  [k: string]: any
 }
 
+// Chart palette (kept in sync with the studio design language).
+const ORANGE = '#FF6B1A'
+const CHARCOAL = '#211C16'
+const GRID = '#EAE4DC'
+const TICK = '#948B80'
+
+const METRIC_TERM: Record<string, string> = { loss: 'loss', reward_mean: 'reward', reward_margin: 'reward_margin' }
+const METRIC_LABEL: Record<string, string> = { loss: 'Loss', reward_mean: 'Reward (mean)', reward_margin: 'Reward margin' }
+
+const KIND_TONE: Record<string, 'orange' | 'dark' | 'amber' | 'berry'> = {
+  sl: 'orange', dpo: 'dark', rl: 'amber', multi_agent: 'berry',
+}
+
+function KindBadge({ kind }: { kind: string }) {
+  const t = TRAINING_TYPES[kind]
+  if (!t) return <Badge tone="neutral">{kind}</Badge>
+  return <Badge tone={KIND_TONE[kind] ?? 'neutral'}>{t.label}</Badge>
+}
+
+function StatusPill({ status }: { status: string }) {
+  const s = statusStyle(status)
+  return (
+    <span className={cn('badge gap-1.5', s.badge)}>
+      <span className={cn('dot', s.dot)} />{s.label}
+    </span>
+  )
+}
+
+// --- Loss / reward chart for the selected run ------------------------------
+function RunChart({ run }: { run: Run }) {
+  const dataVersion = useStore((s) => s.dataVersion)
+  const { data, loading, error } = useAsync<{ series: SeriesPoint[] }>(
+    () => api.analytics.runMetrics(run.id),
+    [run.id, dataVersion],
+  )
+  const [showSecondary, setShowSecondary] = useState(true)
+
+  const series = data?.series ?? []
+  const { primary, secondary } = useMemo(() => {
+    const has = (k: string) => series.some((p) => typeof p[k] === 'number' && !Number.isNaN(p[k]))
+    const hasLoss = has('loss')
+    const rewardKey = has('reward_mean') ? 'reward_mean' : has('reward_margin') ? 'reward_margin' : null
+    const primaryKey = hasLoss ? 'loss' : rewardKey
+    const secondaryKey = rewardKey && rewardKey !== primaryKey ? rewardKey : null
+    return { primary: primaryKey, secondary: secondaryKey }
+  }, [series])
+
+  return (
+    <Card className="card-pad">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="font-display font-bold text-lg text-ink truncate">{run.name}</h3>
+            <KindBadge kind={run.kind} />
+            {run.mode === 'demo' && <Badge tone="amber">demo</Badge>}
+          </div>
+          <p className="text-xs text-ink-mute mt-1 flex items-center gap-1">
+            {primary ? METRIC_LABEL[primary] : 'Metric'} over training steps
+            {primary && <InfoTip term={METRIC_TERM[primary]} />}
+          </p>
+        </div>
+        {secondary && primary && (
+          <Button
+            variant="outline"
+            size="xs"
+            icon={showSecondary ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            onClick={() => setShowSecondary((v) => !v)}
+          >
+            {showSecondary ? 'Hide' : 'Show'} {METRIC_LABEL[secondary].toLowerCase()}
+          </Button>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="h-[240px] flex items-center justify-center"><Spinner className="w-6 h-6" /></div>
+      ) : error ? (
+        <div className="h-[240px] flex items-center justify-center text-sm text-berry text-center px-4">{error}</div>
+      ) : !primary || series.length === 0 ? (
+        <div className="h-[240px] flex items-center justify-center text-sm text-ink-mute text-center px-4">
+          No metrics recorded for this run yet.
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={240}>
+          <LineChart data={series} margin={{ top: 6, right: 8, bottom: 4, left: 0 }}>
+            <CartesianGrid stroke={GRID} vertical={false} />
+            <XAxis
+              dataKey="step" tickLine={false} axisLine={{ stroke: GRID }}
+              tick={{ fill: TICK, fontSize: 11 }}
+            />
+            <YAxis
+              tickLine={false} axisLine={false} width={46} allowDecimals
+              tick={{ fill: TICK, fontSize: 11 }}
+            />
+            <Tooltip
+              contentStyle={{ background: CHARCOAL, border: 'none', borderRadius: 12, color: '#fff', fontSize: 12, padding: '8px 10px' }}
+              labelStyle={{ color: '#fff', fontWeight: 600 }}
+              itemStyle={{ color: '#fff' }}
+              labelFormatter={(l) => `Step ${l}`}
+              formatter={(v: number, name: string) => [fmtNum(v), name]}
+            />
+            <Line
+              type="monotone" dataKey={primary} name={METRIC_LABEL[primary]}
+              stroke={ORANGE} strokeWidth={2} dot={false} connectNulls isAnimationActive={false}
+            />
+            {secondary && showSecondary && (
+              <Line
+                type="monotone" dataKey={secondary} name={METRIC_LABEL[secondary]}
+                stroke={CHARCOAL} strokeWidth={2} dot={false} connectNulls isAnimationActive={false}
+              />
+            )}
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </Card>
+  )
+}
+
+// --- View ------------------------------------------------------------------
 export default function Analytics() {
-  const backendUrl = useStore((state) => state.backendUrl)
-  const apiKey = useStore((state) => state.apiKey)
-  const [metrics, setMetrics] = useState<MetricCard[]>([])
-  const [trainingRuns, setTrainingRuns] = useState<TrainingRun[]>([])
-  const [selectedTimeRange, setSelectedTimeRange] = useState('7d')
+  const dataVersion = useStore((s) => s.dataVersion)
+  const setView = useStore((s) => s.setView)
+  const bump = useStore((s) => s.bump)
 
-  // Fetch analytics data
+  const overview = useAsync<Overview>(() => api.analytics.overview(), [dataVersion])
+  const runsReq = useAsync<{ runs: Run[] }>(() => api.analytics.runs(), [dataVersion])
+
+  const runs = runsReq.data?.runs ?? []
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  // Keep a valid selection: default to the newest run, reset if it vanishes.
   useEffect(() => {
-    const fetchAnalytics = async () => {
-      try {
-        // Fetch summary metrics
-        const summaryResponse = await fetch(`${backendUrl}/api/analytics/summary`, {
-          headers: {
-            'X-API-Key': apiKey
-          }
-        })
-        if (summaryResponse.ok) {
-          const summaryData = await summaryResponse.json()
+    if (!runs.length) { if (selectedId) setSelectedId(null); return }
+    if (!selectedId || !runs.some((r) => r.id === selectedId)) setSelectedId(runs[0].id)
+  }, [runs, selectedId])
 
-          // Transform backend metrics to frontend format
-          const fetchedMetrics: MetricCard[] = summaryData.metrics.map((metric: any) => ({
-            label: metric.label,
-            value: metric.value,
-            change: metric.change,
-            changeType: metric.trend === 'up' ? 'positive' : metric.trend === 'down' ? 'negative' : 'neutral',
-            icon: getIconForMetric(metric.label)
-          }))
-          setMetrics(fetchedMetrics)
-        }
+  const selected = runs.find((r) => r.id === selectedId) ?? null
 
-        // Fetch training runs
-        const runsResponse = await fetch(`${backendUrl}/api/analytics/training-runs`, {
-          headers: {
-            'X-API-Key': apiKey
-          }
-        })
-        if (runsResponse.ok) {
-          const runsData = await runsResponse.json()
-
-          // Transform backend training runs to frontend format
-          const fetchedRuns: TrainingRun[] = runsData.training_runs.map((run: any) => ({
-            name: run.name,
-            loss: run.loss || null,
-            reward: null,  // Not currently tracked
-            accuracy: null,  // Not currently tracked
-            steps: run.steps
-          }))
-          setTrainingRuns(fetchedRuns)
-        }
-      } catch (error) {
-        console.error('Failed to fetch analytics:', error)
-      }
-    }
-
-    fetchAnalytics()
-
-    // Refresh analytics every 5 seconds
-    const interval = setInterval(fetchAnalytics, 5000)
-    return () => clearInterval(interval)
-  }, [backendUrl, apiKey])
-
-  // Helper function to get icon for metric
-  const getIconForMetric = (label: string) => {
-    switch (label.toLowerCase()) {
-      case 'total models':
-        return Target
-      case 'training jobs':
-        return Activity
-      case 'success rate':
-        return Award
-      case 'gpu hours':
-        return TrendingUp
-      default:
-        return BarChart3
-    }
+  const select = (id: string) => setSelectedId(id)
+  const onRowKey = (e: React.KeyboardEvent, id: string) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(id) }
   }
 
   return (
-    <div className="h-full flex flex-col bg-obsidian-bg overflow-y-auto">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="tactical-panel-header sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <span className="led led-emerald"></span>
-          <span className="font-display font-semibold uppercase tracking-wider">Analytics Dashboard</span>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="font-display font-bold text-2xl text-ink">Analytics</h1>
+          <p className="text-sm text-ink-soft mt-1">Real numbers from your training runs — nothing made up.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <select
-            className="input-tactical text-xs px-3 py-1.5 font-mono"
-            value={selectedTimeRange}
-            onChange={(e) => setSelectedTimeRange(e.target.value)}
-          >
-            <option value="24h">Last 24 Hours</option>
-            <option value="7d">Last 7 Days</option>
-            <option value="30d">Last 30 Days</option>
-            <option value="all">All Time</option>
-          </select>
-        </div>
+        <Button variant="outline" size="sm" icon={<RefreshCw className="w-4 h-4" />} onClick={bump}>
+          Refresh
+        </Button>
       </div>
 
-      <div className="p-4 space-y-6">
-        {/* Metric Cards */}
-        {metrics.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <BarChart3 className="w-16 h-16 text-tactical-500 mb-4 opacity-50" />
-            <h3 className="text-lg font-semibold text-dark-text mb-2">No analytics data yet</h3>
-            <p className="text-sm text-dark-text-secondary max-w-md">
-              Start training models to see analytics and performance metrics. Data will appear here once training begins.
-            </p>
-          </div>
+      {/* Overview cards */}
+      {overview.loading ? (
+        <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="card card-pad">
+              <Skeleton className="h-3 w-20" />
+              <Skeleton className="h-8 w-16 mt-3" />
+              <Skeleton className="h-3 w-24 mt-3" />
+            </div>
+          ))}
+        </div>
+      ) : overview.error ? (
+        <Card className="card-pad text-sm text-berry">Couldn’t load the overview: {overview.error}</Card>
+      ) : (
+        <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
+          {(overview.data?.cards ?? []).map((c, i) => (
+            <Stat
+              key={i}
+              label={c.label}
+              value={c.value === null || c.value === undefined || c.value === '' ? '—' : c.value}
+              hint={c.hint}
+              accent={i === 0}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Runs */}
+      <div>
+        <h2 className="font-display font-bold text-lg text-ink mb-3">Training runs</h2>
+
+        {runsReq.loading ? (
+          <Card className="card-pad space-y-3">
+            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+          </Card>
+        ) : runsReq.error ? (
+          <Card className="card-pad text-sm text-berry">Couldn’t load runs: {runsReq.error}</Card>
+        ) : runs.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon={<BarChart3 className="w-6 h-6" />}
+              title="Train a model to see analytics"
+              description="Once you kick off a run, its loss curve, status, and metrics show up here."
+              action={<Button icon={<ArrowRight className="w-4 h-4" />} onClick={() => setView('train')}>Go to Train</Button>}
+            />
+          </Card>
         ) : (
-          <div className="grid grid-cols-4 gap-4">
-            {metrics.map((metric, idx) => (
-              <div
-                key={idx}
-                className="bg-dark-surface border border-dark-border rounded-ide p-4"
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <metric.icon className="w-5 h-5 text-brain-blue-500" />
-                  <span
-                    className={`text-xs font-medium ${
-                      metric.changeType === 'positive'
-                        ? 'text-green-400'
-                        : metric.changeType === 'negative'
-                        ? 'text-red-400'
-                        : 'text-dark-text-secondary'
-                    }`}
-                  >
-                    {metric.change}
-                  </span>
-                </div>
-                <div className="text-2xl font-semibold mb-1">{metric.value}</div>
-                <div className="text-xs text-dark-text-secondary">{metric.label}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {metrics.length > 0 && (
-          <>
-            {/* Training Loss Chart (Placeholder) */}
-            <div className="bg-dark-surface border border-dark-border rounded-ide p-4">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold flex items-center gap-2">
-                  <LineChart className="w-4 h-4 text-brain-blue-500" />
-                  Training Loss Over Time
-                </h3>
-                <div className="flex items-center gap-2">
-                  <button className="btn btn-ghost btn-sm text-xs">SL</button>
-                  <button className="btn btn-ghost btn-sm text-xs">RL</button>
-                  <button className="btn btn-ghost btn-sm text-xs">RLHF</button>
-                </div>
-              </div>
-
-              {/* Chart placeholder - will be replaced with Recharts */}
-              <div className="h-64 bg-dark-hover rounded flex items-center justify-center">
-                <div className="text-center text-dark-text-secondary">
-                  <LineChart className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">Chart will render here with Recharts</p>
-                  <p className="text-xs mt-1">Install: npm install recharts</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Reward Distribution (Placeholder) */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-dark-surface border border-dark-border rounded-ide p-4">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold flex items-center gap-2">
-                    <BarChart3 className="w-4 h-4 text-brain-blue-500" />
-                    Reward Distribution
-                  </h3>
-                </div>
-                <div className="h-48 bg-dark-hover rounded flex items-center justify-center">
-                  <div className="text-center text-dark-text-secondary">
-                    <BarChart3 className="w-10 h-10 mx-auto mb-2 opacity-50" />
-                    <p className="text-xs">Histogram placeholder</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-dark-surface border border-dark-border rounded-ide p-4">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold flex items-center gap-2">
-                    <Activity className="w-4 h-4 text-brain-blue-500" />
-                    Learning Rate Schedule
-                  </h3>
-                </div>
-                <div className="h-48 bg-dark-hover rounded flex items-center justify-center">
-                  <div className="text-center text-dark-text-secondary">
-                    <Activity className="w-10 h-10 mx-auto mb-2 opacity-50" />
-                    <p className="text-xs">LR schedule placeholder</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Training Runs Comparison */}
-            <div className="bg-dark-surface border border-dark-border rounded-ide p-4">
-              <h3 className="font-semibold mb-4">Training Runs Comparison</h3>
-              {trainingRuns.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-center">
-                  <LineChart className="w-12 h-12 text-tactical-500 mb-3 opacity-50" />
-                  <p className="text-sm text-dark-text-secondary">No training runs to compare</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-dark-border">
-                        <th className="text-left py-2 px-3 text-dark-text-secondary font-medium">Model</th>
-                        <th className="text-right py-2 px-3 text-dark-text-secondary font-medium">Steps</th>
-                        <th className="text-right py-2 px-3 text-dark-text-secondary font-medium">Loss</th>
-                        <th className="text-right py-2 px-3 text-dark-text-secondary font-medium">Reward</th>
-                        <th className="text-right py-2 px-3 text-dark-text-secondary font-medium">Accuracy</th>
+          <Card className="overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[820px]">
+                <thead>
+                  <tr className="text-left text-xs font-semibold uppercase tracking-wide text-ink-mute border-b border-line">
+                    <th className="px-4 py-3 font-semibold">Run</th>
+                    <th className="px-4 py-3 font-semibold">Type</th>
+                    <th className="px-4 py-3 font-semibold">Base model</th>
+                    <th className="px-4 py-3 font-semibold">Status</th>
+                    <th className="px-4 py-3 font-semibold">Steps</th>
+                    <th className="px-4 py-3 font-semibold">
+                      <span className="inline-flex items-center gap-1">Final loss<InfoTip term="loss" /></span>
+                    </th>
+                    <th className="px-4 py-3 font-semibold">Duration</th>
+                    <th className="px-4 py-3 font-semibold">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runs.map((r) => {
+                    const active = r.id === selectedId
+                    return (
+                      <tr
+                        key={r.id}
+                        onClick={() => select(r.id)}
+                        onKeyDown={(e) => onRowKey(e, r.id)}
+                        tabIndex={0}
+                        role="button"
+                        aria-pressed={active}
+                        className={cn(
+                          'border-b border-line last:border-0 cursor-pointer outline-none transition-colors',
+                          'focus-visible:ring-2 focus-visible:ring-orange/50',
+                          active ? 'bg-orange-soft' : 'hover:bg-line-soft',
+                        )}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <span className={cn('font-semibold text-ink truncate max-w-[200px]', active && 'text-orange-ink')} title={r.name}>
+                              {r.name}
+                            </span>
+                            {r.mode === 'demo' && <Badge tone="amber">demo</Badge>}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3"><KindBadge kind={r.kind} /></td>
+                        <td className="px-4 py-3">
+                          <span className="text-ink-soft truncate block max-w-[180px]" title={r.base_model}>{r.base_model || '—'}</span>
+                        </td>
+                        <td className="px-4 py-3"><StatusPill status={r.status} /></td>
+                        <td className="px-4 py-3 font-mono text-xs text-ink-soft whitespace-nowrap">
+                          {fmtInt(r.steps)}{r.total_steps ? ` / ${fmtInt(r.total_steps)}` : ''}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-xs text-ink">{fmtNum(r.loss)}</td>
+                        <td className="px-4 py-3 text-ink-soft whitespace-nowrap">{r.duration || '—'}</td>
+                        <td className="px-4 py-3 text-ink-mute whitespace-nowrap">{relTime(r.created_at) || '—'}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {trainingRuns.map((run, idx) => (
-                        <tr key={idx} className="border-b border-dark-border/50 hover:bg-dark-hover">
-                          <td className="py-3 px-3 font-medium">{run.name}</td>
-                          <td className="py-3 px-3 text-right font-mono text-dark-text-secondary">
-                            {run.steps.toLocaleString()}
-                          </td>
-                          <td className="py-3 px-3 text-right font-mono">
-                            {run.loss !== null ? (
-                              <span className="text-blue-400">{run.loss.toFixed(3)}</span>
-                            ) : (
-                              <span className="text-dark-text-secondary">-</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3 text-right font-mono">
-                            {run.reward !== null ? (
-                              <span className="text-green-400">{run.reward.toFixed(2)}</span>
-                            ) : (
-                              <span className="text-dark-text-secondary">-</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3 text-right font-mono">
-                            {run.accuracy !== null ? (
-                              <span className="text-purple-400">{(run.accuracy * 100).toFixed(1)}%</span>
-                            ) : (
-                              <span className="text-dark-text-secondary">-</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
-
-            {/* Evaluation Results */}
-            <div className="bg-dark-surface border border-dark-border rounded-ide p-4">
-              <h3 className="font-semibold mb-4">Evaluation Results</h3>
-              <div className="grid grid-cols-3 gap-4">
-                <div className="border border-dark-border rounded p-3">
-                  <div className="text-xs text-dark-text-secondary mb-1">InspectAI - MMLU</div>
-                  <div className="text-2xl font-semibold text-blue-400">72.3%</div>
-                </div>
-                <div className="border border-dark-border rounded p-3">
-                  <div className="text-xs text-dark-text-secondary mb-1">InspectAI - IFEval</div>
-                  <div className="text-2xl font-semibold text-green-400">84.1%</div>
-                </div>
-                <div className="border border-dark-border rounded p-3">
-                  <div className="text-xs text-dark-text-secondary mb-1">Custom - Code Review</div>
-                  <div className="text-2xl font-semibold text-purple-400">89.4%</div>
-                </div>
-              </div>
-            </div>
-
-            {/* System Stats */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-dark-surface border border-dark-border rounded-ide p-4">
-                <h3 className="font-semibold mb-4">GPU Utilization</h3>
-                <div className="space-y-3">
-                  {['GPU 0', 'GPU 1', 'GPU 2', 'GPU 3'].map((gpu, idx) => (
-                    <div key={idx}>
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-dark-text-secondary">{gpu}</span>
-                        <span className="font-mono">{75 + idx * 3}%</span>
-                      </div>
-                      <div className="h-1.5 bg-dark-hover rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-brain-blue-500"
-                          style={{ width: `${75 + idx * 3}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="bg-dark-surface border border-dark-border rounded-ide p-4">
-                <h3 className="font-semibold mb-4">Resource Usage</h3>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-dark-text-secondary">GPU Memory:</span>
-                    <span className="font-mono">24.3 / 32 GB</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-dark-text-secondary">CPU Usage:</span>
-                    <span className="font-mono">45%</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-dark-text-secondary">RAM:</span>
-                    <span className="font-mono">18.2 / 64 GB</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-dark-text-secondary">Network I/O:</span>
-                    <span className="font-mono">124 MB/s</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </>
+          </Card>
         )}
       </div>
+
+      {/* Selected run chart */}
+      {selected && <RunChart run={selected} />}
     </div>
   )
 }

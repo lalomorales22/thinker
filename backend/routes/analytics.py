@@ -1,131 +1,91 @@
 """
-Analytics routes for aggregating training metrics and system stats
+Analytics routes — real aggregates from real data.
+
+No more fabricated "GPU Hours" (steps/3600) or hardcoded "+100%" deltas. Every
+number here is derived from the actual jobs/metrics/models in the database, and
+loss curves come from the real per-step metrics time-series.
 """
-from fastapi import APIRouter
+from __future__ import annotations
+
 from datetime import datetime
-from typing import List, Dict, Any
+
+from fastapi import APIRouter, HTTPException
+
+import db
 
 router = APIRouter()
 
-@router.get("/summary")
-async def get_analytics_summary():
-    """Get aggregate analytics across all training jobs"""
-    from .training import training_jobs
-    from .models import saved_models
 
-    # Calculate aggregate metrics
-    total_jobs = len(training_jobs)
-    completed_jobs = sum(1 for job in training_jobs.values() if job["status"] == "completed")
-    running_jobs = sum(1 for job in training_jobs.values() if job["status"] == "running")
-    failed_jobs = sum(1 for job in training_jobs.values() if job["status"] == "failed")
+def _duration(started: str | None, completed: str | None) -> str:
+    if not started:
+        return "—"
+    try:
+        s = datetime.fromisoformat(started)
+        e = datetime.fromisoformat(completed) if completed else None
+        if e is None:
+            return "running"
+        secs = (e - s).total_seconds()
+        return f"{int(secs // 60)}m {int(secs % 60)}s" if secs >= 60 else f"{int(secs)}s"
+    except (ValueError, TypeError):
+        return "—"
 
-    # Calculate total training steps
-    total_steps = sum(job.get("current_step", 0) for job in training_jobs.values())
 
-    # Calculate average loss from completed jobs
-    completed_losses = [
-        job.get("metrics", {}).get("loss", 0)
-        for job in training_jobs.values()
-        if job["status"] == "completed" and job.get("metrics", {}).get("loss") is not None
-    ]
-    avg_loss = sum(completed_losses) / len(completed_losses) if completed_losses else 0
+@router.get("/overview")
+async def overview():
+    jobs = db.list_jobs()
+    models = db.list_models()
+    datasets = db.list_datasets()
 
-    # Calculate success rate
-    success_rate = (completed_jobs / total_jobs * 100) if total_jobs > 0 else 0
+    by_status = {"completed": 0, "running": 0, "failed": 0, "queued": 0, "cancelled": 0}
+    total_steps = 0
+    for j in jobs:
+        by_status[j["status"]] = by_status.get(j["status"], 0) + 1
+        total_steps += j.get("current_step", 0)
 
-    # Total models saved
-    total_models = len(saved_models)
-
-    # Calculate total GPU hours (approximate based on steps)
-    # Assuming each step takes ~1 second (this is a rough estimate)
-    total_gpu_hours = total_steps / 3600.0
+    total = len(jobs)
+    success_rate = (by_status["completed"] / total * 100) if total else 0.0
 
     return {
-        "metrics": [
-            {
-                "label": "Total Models",
-                "value": str(total_models),
-                "change": "+100%",  # Could calculate actual change if we track history
-                "trend": "up"
-            },
-            {
-                "label": "Training Jobs",
-                "value": str(total_jobs),
-                "change": f"{completed_jobs} completed",
-                "trend": "neutral"
-            },
-            {
-                "label": "Success Rate",
-                "value": f"{success_rate:.1f}%",
-                "change": f"{failed_jobs} failed",
-                "trend": "up" if success_rate > 80 else "neutral"
-            },
-            {
-                "label": "GPU Hours",
-                "value": f"{total_gpu_hours:.1f}h",
-                "change": f"{running_jobs} running",
-                "trend": "up"
-            }
-        ]
+        "cards": [
+            {"label": "Trained models", "value": len(models), "hint": "Ready to use in the Playground"},
+            {"label": "Training runs", "value": total, "hint": f"{by_status['completed']} completed · {by_status['failed']} failed"},
+            {"label": "Success rate", "value": f"{success_rate:.0f}%", "hint": f"{by_status['running']} running now"},
+            {"label": "Datasets", "value": len(datasets), "hint": f"{sum(d['num_samples'] for d in datasets):,} total examples"},
+            {"label": "Steps trained", "value": f"{total_steps:,}", "hint": "Across all runs"},
+            {"label": "Feedback pairs", "value": db.count_preferences(), "hint": "From Playground ratings"},
+        ],
+        "by_status": by_status,
     }
 
-@router.get("/training-runs")
-async def get_training_runs():
-    """Get historical training run data for charts"""
-    from .training import training_jobs
 
-    # Convert training jobs to training run format
-    runs: List[Dict[str, Any]] = []
+@router.get("/runs")
+async def runs():
+    """Recent training runs with their final loss and duration (real data)."""
+    out = []
+    for j in db.list_jobs():
+        final = db.latest_metric(j["id"])
+        out.append({
+            "id": j["id"],
+            "name": j["name"] or j["id"],
+            "kind": j["kind"],
+            "base_model": j["base_model"],
+            "dataset_id": j["dataset_id"],
+            "status": j["status"],
+            "steps": j["current_step"],
+            "total_steps": j["total_steps"],
+            "loss": final.get("loss"),
+            "mode": final.get("mode"),
+            "duration": _duration(j.get("started_at"), j.get("completed_at")),
+            "created_at": j["created_at"],
+        })
+    return {"runs": out}
 
-    for job_id, job in training_jobs.items():
-        # Only include jobs that have started
-        if job.get("started_at"):
-            run = {
-                "id": job_id,
-                "name": f"{job['config'].get('training_type', 'training')}_{job_id.split('_')[-1]}",
-                "model": job["config"].get("model_name", "unknown"),
-                "dataset": "training_data",  # Could be enhanced to track actual dataset
-                "status": job["status"],
-                "duration": "0m",  # Will calculate below
-                "loss": job.get("metrics", {}).get("loss", 0),
-                "steps": job.get("current_step", 0),
-                "timestamp": job.get("started_at", datetime.now()).isoformat() if isinstance(job.get("started_at"), datetime) else job.get("started_at", datetime.now().isoformat())
-            }
 
-            # Calculate duration
-            if job.get("started_at") and job.get("completed_at"):
-                start = job["started_at"] if isinstance(job["started_at"], datetime) else datetime.fromisoformat(job["started_at"])
-                end = job["completed_at"] if isinstance(job["completed_at"], datetime) else datetime.fromisoformat(job["completed_at"])
-                duration_seconds = (end - start).total_seconds()
-                duration_minutes = int(duration_seconds / 60)
-                run["duration"] = f"{duration_minutes}m" if duration_minutes > 0 else f"{int(duration_seconds)}s"
-            elif job["status"] == "running" and job.get("started_at"):
-                start = job["started_at"] if isinstance(job["started_at"], datetime) else datetime.fromisoformat(job["started_at"])
-                duration_seconds = (datetime.now() - start).total_seconds()
-                duration_minutes = int(duration_seconds / 60)
-                run["duration"] = f"{duration_minutes}m" if duration_minutes > 0 else f"{int(duration_seconds)}s"
-
-            runs.append(run)
-
-    # Sort by timestamp (most recent first)
-    runs.sort(key=lambda x: x["timestamp"], reverse=True)
-
-    return {"training_runs": runs}
-
-@router.get("/metrics-history/{job_id}")
-async def get_metrics_history(job_id: str):
-    """Get detailed metrics history for a specific job"""
-    from .training import training_jobs
-
-    if job_id not in training_jobs:
-        return {"error": "Job not found"}
-
-    job = training_jobs[job_id]
-
-    # In a real implementation, we'd store metrics history
-    # For now, return the current metrics
-    return {
-        "job_id": job_id,
-        "metrics": job.get("metrics", {}),
-        "history": []  # Could be enhanced to store step-by-step metrics
-    }
+@router.get("/runs/{job_id}/metrics")
+async def run_metrics(job_id: str):
+    if not db.get_job(job_id):
+        raise HTTPException(404, "Job not found")
+    history = db.get_metrics(job_id)
+    # Flatten into a chart-friendly series.
+    series = [{"step": h["step"], **h["data"]} for h in history]
+    return {"job_id": job_id, "series": series}

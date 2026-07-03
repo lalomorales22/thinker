@@ -1,645 +1,354 @@
 """
-HuggingFace Dataset Import - Git-clone style dataset importing
-"""
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional, Dict, List, Any
-import os
-import json
-from datetime import datetime
-import asyncio
-import logging
+HuggingFace dataset import — wired straight into training, and robust to messy
+schemas.
 
-# Import HuggingFace libraries
-try:
-    from datasets import load_dataset, get_dataset_config_names, list_datasets
-    from huggingface_hub import HfApi, list_datasets as hf_list_datasets
-    HUGGINGFACE_AVAILABLE = True
-except ImportError:
-    HUGGINGFACE_AVAILABLE = False
-    logging.warning("HuggingFace datasets library not installed. Run: pip install datasets huggingface-hub")
+The old importer wrote a file to a stray folder and returned a filename, so
+imported data could never be trained on. It also loaded data through the
+`datasets` library's Arrow pipeline, which fails with "Couldn't cast … column
+names don't match" on datasets whose rows/shards have heterogeneous shapes
+(nulls, nested structs, tool-call records, …).
+
+This version:
+  - loads rows via HuggingFace's dataset-viewer API (plain JSON, schema-tolerant,
+    no full download), falling back to the `datasets` library only if needed,
+  - converts role-aware chat data instead of joining it into one blob,
+  - validates the result against the chosen training type with a friendly message,
+  - REGISTERS the dataset in the shared registry (db) + unified storage folder,
+    so it appears in the dataset list and is immediately trainable.
+"""
+from __future__ import annotations
+
+import itertools
+import json
+import os
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+import httpx
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+import db
+from config import DATASETS_DIR
+from training import datautil
+from utils import logger
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
-class DatasetSearchResult(BaseModel):
-    name: str
-    description: str
-    downloads: int
-    likes: int
-    tags: List[str]
-    size: Optional[str] = None
+VIEWER = "https://datasets-server.huggingface.co"
 
-class DatasetInfo(BaseModel):
-    name: str
-    description: str
-    splits: List[str]
-    features: Dict[str, str]
-    num_rows: Dict[str, int]
-    size_in_bytes: Optional[int] = None
+try:
+    from datasets import load_dataset, load_dataset_builder, get_dataset_config_names
+    from huggingface_hub import HfApi
+    HF_AVAILABLE = True
+except ImportError:
+    HF_AVAILABLE = False
+    logger.warning("`datasets`/`huggingface_hub` not installed — the viewer API is still used for import.")
+
+# Ephemeral per-import progress (fine to lose on restart; it's transient UI state).
+_progress: dict[str, dict[str, Any]] = {}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _hf_headers() -> dict[str, str]:
+    token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+# --- dataset-viewer helpers (primary, schema-tolerant JSON) ------------------
+
+async def _viewer_get(path: str, params: dict) -> Optional[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(f"{VIEWER}/{path}", params=params, headers=_hf_headers())
+        if r.status_code == 200:
+            return r.json()
+        logger.info(f"viewer /{path} -> {r.status_code}: {r.text[:160]}")
+    except Exception as e:
+        logger.info(f"viewer /{path} error: {e}")
+    return None
+
+
+async def _viewer_splits(dataset: str) -> list[dict[str, str]]:
+    data = await _viewer_get("splits", {"dataset": dataset})
+    return data.get("splits", []) if data else []
+
+
+async def _resolve_config(dataset: str, split: str, subset: Optional[str]) -> Optional[str]:
+    if subset:
+        return subset
+    splits = await _viewer_splits(dataset)
+    for s in splits:
+        if s.get("split") == split:
+            return s.get("config")
+    return splits[0].get("config") if splits else "default"
+
+
+async def _viewer_rows(dataset: str, config: str, split: str, limit: int) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    while len(rows) < limit:
+        length = min(100, limit - len(rows))
+        data = await _viewer_get("rows", {"dataset": dataset, "config": config,
+                                          "split": split, "offset": offset, "length": length})
+        if not data:
+            break
+        batch = data.get("rows", [])
+        if not batch:
+            break
+        for item in batch:
+            rows.append(item.get("row", {}))
+        offset += length
+        if len(batch) < length:
+            break
+    return rows
+
+
+async def fetch_rows(dataset: str, split: str, subset: Optional[str], limit: int) -> tuple[list[dict], Optional[str]]:
+    """Load up to `limit` rows as plain dicts. Viewer first, `datasets` fallback."""
+    # 1) dataset-viewer API — tolerant of nested/heterogeneous schemas.
+    try:
+        config = await _resolve_config(dataset, split, subset)
+        if config:
+            rows = await _viewer_rows(dataset, config, split, limit)
+            if rows:
+                return rows, config
+    except Exception as e:
+        logger.info(f"viewer rows failed for {dataset}: {e}")
+
+    # 2) Fallback: streaming via the datasets library.
+    if HF_AVAILABLE:
+        try:
+            ds = load_dataset(dataset, subset, split=split, streaming=True)
+            rows = [dict(x) for x in itertools.islice(ds, limit)]
+            return rows, subset
+        except Exception as e:
+            raise HTTPException(502, _friendly_load_error(dataset, e))
+
+    raise HTTPException(502, _friendly_load_error(dataset, None))
+
+
+def _friendly_load_error(dataset: str, err: Exception | None) -> str:
+    msg = str(err) if err else ""
+    if "cast" in msg.lower() or "column names don't match" in msg.lower():
+        return (f"'{dataset}' has an unusual/mixed row format that couldn't be read automatically "
+                "(its rows don't all share the same columns). Try a specific split or subset, pick a "
+                "cleaner dataset, or download it and upload a .jsonl file instead.")
+    if "gated" in msg.lower() or "401" in msg or "403" in msg:
+        return (f"'{dataset}' looks private or gated. Set an HF_TOKEN on the backend, or choose a public dataset.")
+    return (f"Couldn't load '{dataset}'. It may be private, gated, very large, or in an unusual format. "
+            "Try a different split/subset or upload a file instead.")
+
+
+# --- endpoints ---------------------------------------------------------------
+
+@router.get("/search")
+async def search_datasets(query: str = "", limit: int = 12):
+    if not HF_AVAILABLE:
+        raise HTTPException(503, "HuggingFace Hub client not installed on the backend (`pip install huggingface-hub`).")
+    try:
+        api = HfApi()
+        results = []
+        for d in api.list_datasets(search=query or None, limit=limit, sort="downloads", direction=-1):
+            results.append({
+                "name": d.id,
+                "description": (getattr(d, "description", "") or "").strip()[:200] or f"Dataset: {d.id}",
+                "downloads": getattr(d, "downloads", 0) or 0,
+                "likes": getattr(d, "likes", 0) or 0,
+                "tags": (getattr(d, "tags", []) or [])[:6],
+            })
+        return {"datasets": results}
+    except Exception as e:
+        logger.error(f"HF search failed: {e}")
+        raise HTTPException(502, f"HuggingFace search failed: {e}")
+
+
+@router.get("/popular")
+async def popular():
+    """Curated, current, correctly-scoped starter datasets per training type."""
+    return {
+        "sl": [
+            {"name": "HuggingFaceH4/no_robots", "description": "10k high-quality instruction conversations", "samples": 9500},
+            {"name": "tatsu-lab/alpaca", "description": "52k instruction-following demos", "samples": 52000},
+            {"name": "databricks/databricks-dolly-15k", "description": "15k human instruction/response pairs", "samples": 15000},
+        ],
+        "dpo": [
+            {"name": "HuggingFaceH4/ultrafeedback_binarized", "description": "Binary preferences for DPO", "samples": 61135},
+            {"name": "Anthropic/hh-rlhf", "description": "Helpful/harmless preference pairs", "samples": 160000},
+        ],
+        "rl": [
+            {"name": "openai/gsm8k", "description": "Grade-school math (use subset 'main')", "samples": 8792, "subset": "main"},
+            {"name": "openai/openai_humaneval", "description": "164 Python coding problems", "samples": 164},
+        ],
+    }
+
+
+@router.get("/info/{dataset_name:path}")
+async def dataset_info(dataset_name: str):
+    # Prefer the viewer (robust); fall back to the datasets builder.
+    splits_data = await _viewer_splits(dataset_name)
+    if splits_data:
+        configs = sorted({s.get("config") for s in splits_data if s.get("config")})
+        config = configs[0] if configs else "default"
+        splits = [s.get("split") for s in splits_data if s.get("config") == config] or ["train"]
+        # Column names + nested field paths from the first rows.
+        first = await _viewer_get("first-rows", {"dataset": dataset_name, "config": config, "split": splits[0]})
+        features = {}
+        if first:
+            for f in first.get("features", []):
+                features[f.get("name")] = _type_name(f.get("type"))
+        sample_rows = first.get("rows", []) if first else []
+        sample = sample_rows[0].get("row", {}) if sample_rows else {}
+        field_paths = datautil.flatten_paths(sample) if sample else list(features.keys())
+        return {"name": dataset_name, "description": f"Dataset: {dataset_name}",
+                "configs": configs, "splits": splits, "features": features,
+                "field_paths": field_paths, "num_rows": {}}
+
+    if HF_AVAILABLE:
+        try:
+            try:
+                configs = get_dataset_config_names(dataset_name)
+            except Exception:
+                configs = []
+            config = configs[0] if configs else None
+            builder = load_dataset_builder(dataset_name, config)
+            features = {}
+            if builder.info.features:
+                for name, feat in builder.info.features.items():
+                    features[name] = getattr(feat, "dtype", type(feat).__name__)
+            splits, num_rows = [], {}
+            if builder.info.splits:
+                for sname, sinfo in builder.info.splits.items():
+                    splits.append(sname)
+                    num_rows[sname] = getattr(sinfo, "num_examples", 0)
+            return {"name": dataset_name, "description": (builder.info.description or "")[:400] or f"Dataset: {dataset_name}",
+                    "configs": configs, "splits": splits or ["train"], "features": features,
+                    "field_paths": list(features.keys()), "num_rows": num_rows}
+        except Exception as e:
+            raise HTTPException(502, _friendly_load_error(dataset_name, e))
+    raise HTTPException(502, _friendly_load_error(dataset_name, None))
+
+
+def _type_name(t: Any) -> str:
+    if isinstance(t, dict):
+        return t.get("dtype") or t.get("_type") or "value"
+    return str(t)
+
+
+class PreviewRequest(BaseModel):
+    dataset_name: str
+    split: str = "train"
+    subset: Optional[str] = None
+    num_samples: int = 5
+
+
+@router.post("/preview")
+async def preview(req: PreviewRequest):
+    rows = (await fetch_rows(req.dataset_name, req.split, req.subset, max(1, min(req.num_samples, 20))))[0]
+    trimmed = [{k: (v if not isinstance(v, str) else v[:600]) for k, v in r.items()} for r in rows]
+    return {"dataset_name": req.dataset_name, "rows": trimmed,
+            "columns": list(rows[0].keys()) if rows else []}
+
 
 class FieldMapping(BaseModel):
     source_field: str
-    target_field: str  # 'prompt', 'completion', 'chosen', 'rejected', etc.
+    target_field: str  # prompt | completion | chosen | rejected | reference | messages
+
 
 class ImportRequest(BaseModel):
     dataset_name: str
     split: str = "train"
     subset: Optional[str] = None
-    field_mappings: List[FieldMapping]
-    max_samples: Optional[int] = None  # Limit number of samples to import
+    training_type: str = "sl"                    # sl | dpo | rl
+    field_mappings: list[FieldMapping] = Field(default_factory=list)
+    max_samples: int = 1000
+    name: Optional[str] = None
 
-class ImportProgress(BaseModel):
-    status: str  # 'downloading', 'converting', 'saving', 'complete', 'error'
-    progress: int  # 0-100
-    message: str
-    samples_processed: int = 0
-    total_samples: int = 0
 
-# Storage for import progress (in production, use Redis or similar)
-import_progress_store: Dict[str, ImportProgress] = {}
-
-@router.get("/search")
-async def search_datasets(query: str, limit: int = 10):
-    """
-    Search HuggingFace Hub for datasets.
-    """
-    if not HUGGINGFACE_AVAILABLE:
-        # Return mock data if library not available
-        return _get_mock_search_results(query, limit)
+@router.post("/import")
+async def import_dataset(req: ImportRequest):
+    tt = (req.training_type or "sl").lower()
+    import_id = f"imp_{uuid.uuid4().hex[:10]}"
+    _progress[import_id] = {"status": "downloading", "progress": 10,
+                            "message": f"Loading {req.dataset_name} ({req.split})…",
+                            "samples_processed": 0, "total_samples": req.max_samples}
 
     try:
-        # Use HuggingFace Hub API to search datasets
-        api = HfApi()
-        datasets = api.list_datasets(
-            search=query,
-            limit=limit,
-            sort="downloads",
-            direction=-1
-        )
+        raw_rows, _config = await fetch_rows(req.dataset_name, req.split, req.subset, max(1, req.max_samples))
+        _progress[import_id].update(status="converting", progress=45, message="Converting rows…")
 
-        results = []
-        for dataset in datasets:
-            results.append({
-                "name": dataset.id,
-                "description": getattr(dataset, 'description', '') or f"Dataset: {dataset.id}",
-                "downloads": getattr(dataset, 'downloads', 0) or 0,
-                "likes": getattr(dataset, 'likes', 0) or 0,
-                "tags": getattr(dataset, 'tags', []) or [],
-                "size": None  # Size info not always available
-            })
+        # Field mappings are ADDITIVE: keep every original column AND add the
+        # mapped aliases. This way a dataset whose useful data lives in an
+        # unmapped column (e.g. no_robots' `messages`) still works.
+        mappings = {m.source_field: m.target_field for m in req.field_mappings}
+        rows: list[dict[str, Any]] = []
+        for item in raw_rows:
+            row = dict(item)
+            for src, tgt in mappings.items():
+                if not tgt:
+                    continue
+                # Supports nested dot-paths, e.g. "message.content" or "messages.-1.content".
+                val = datautil.get_path(item, src)
+                if val is not None:
+                    row[tgt] = val
+            rows.append(row)
 
-        return {"datasets": results}
+        # Validate against the intended training type.
+        check = datautil.validate(rows, tt if tt in ("sl", "dpo", "rl") else "sl")
+        if not check["ok"]:
+            _progress[import_id].update(status="error", progress=0,
+                                        message="Imported data isn't compatible with this training type.")
+            raise HTTPException(400, "This dataset's columns don't match " + tt.upper() + " training. "
+                                     + " ".join(check["notes"]) +
+                                     " Use the field-mapping step to map its columns to prompt/completion "
+                                     "(or prompt/chosen/rejected for preference training).")
 
+        _progress[import_id].update(status="saving", progress=90, message="Saving…")
+        dataset_id = str(uuid.uuid4())
+        fname = f"{dataset_id}_{req.dataset_name.replace('/', '_')}_{req.split}.jsonl"
+        path = str(DATASETS_DIR / fname)
+        with open(path, "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+
+        num = len(rows)
+        rec = {
+            "id": dataset_id,
+            "name": req.name or f"{req.dataset_name} ({req.split})",
+            "source": "huggingface",
+            "training_type": tt,
+            "format": "jsonl",
+            "path": path,
+            "num_samples": num,
+            "size_bytes": os.path.getsize(path),
+            "columns": check["columns"],
+            "split": {"train": int(num * 0.9), "validation": num - int(num * 0.9), "test": 0},
+            "schema_ok": check["ok"],
+            "schema_notes": check["notes"],
+            "meta": {"hf_dataset": req.dataset_name, "hf_split": req.split, "hf_subset": req.subset},
+            "created_at": _now(),
+        }
+        dataset = db.add_dataset(rec)          # <-- register so training can find it
+        _progress[import_id].update(status="complete", progress=100,
+                                    message=f"Imported {num} examples", samples_processed=num, total_samples=num)
+        logger.info(f"Imported {num} rows from {req.dataset_name} -> dataset {dataset_id}")
+        return {"import_id": import_id, "dataset": dataset}
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error searching HuggingFace datasets: {e}")
-        # Fallback to mock data on error
-        return _get_mock_search_results(query, limit)
+        logger.error(f"HF import failed: {e}", exc_info=True)
+        _progress[import_id] = {"status": "error", "progress": 0, "message": _friendly_load_error(req.dataset_name, e),
+                                "samples_processed": 0, "total_samples": 0}
+        raise HTTPException(502, _friendly_load_error(req.dataset_name, e))
 
-def _get_mock_search_results(query: str, limit: int):
-    """Fallback mock data when HuggingFace API is unavailable"""
-    mock_datasets = [
-        {
-            "name": "HuggingFaceH4/ultrafeedback_binarized",
-            "description": "UltraFeedback dataset with binary preferences for DPO training",
-            "downloads": 50000,
-            "likes": 234,
-            "tags": ["dpo", "rlhf", "preferences"],
-            "size": "500 MB"
-        },
-        {
-            "name": "HuggingFaceH4/no_robots",
-            "description": "High-quality human-generated conversations",
-            "downloads": 30000,
-            "likes": 156,
-            "tags": ["conversation", "supervised-learning"],
-            "size": "100 MB"
-        },
-        {
-            "name": "openai/gsm8k",
-            "description": "Grade school math word problems",
-            "downloads": 80000,
-            "likes": 412,
-            "tags": ["math", "reasoning"],
-            "size": "50 MB"
-        },
-        {
-            "name": "bigcode/the-stack",
-            "description": "Large dataset of source code in 30+ languages",
-            "downloads": 100000,
-            "likes": 567,
-            "tags": ["code", "programming"],
-            "size": "6 TB"
-        },
-        {
-            "name": "tatsu-lab/alpaca",
-            "description": "52K instruction-following demonstrations",
-            "downloads": 120000,
-            "likes": 892,
-            "tags": ["instruction", "supervised-learning"],
-            "size": "25 MB"
-        }
-    ]
-
-    # Filter by query
-    if query:
-        filtered = [d for d in mock_datasets if query.lower() in d["name"].lower() or query.lower() in d["description"].lower()]
-    else:
-        filtered = mock_datasets
-
-    return {"datasets": filtered[:limit]}
-
-@router.get("/info/{dataset_name:path}")
-async def get_dataset_info(dataset_name: str):
-    """
-    Get detailed information about a dataset.
-    """
-    if not HUGGINGFACE_AVAILABLE:
-        return _get_mock_dataset_info(dataset_name)
-
-    try:
-        # Load dataset info from HuggingFace
-        # First, try to get configs
-        configs = []
-        try:
-            configs = get_dataset_config_names(dataset_name)
-        except:
-            configs = [None]  # No configs, use default
-
-        # Load the first config (or default)
-        config = configs[0] if configs else None
-
-        # Load dataset builder to get info without downloading data
-        from datasets import load_dataset_builder
-        builder = load_dataset_builder(dataset_name, config)
-
-        # Get features
-        features = {}
-        if builder.info.features:
-            for name, feature in builder.info.features.items():
-                features[name] = str(feature.dtype) if hasattr(feature, 'dtype') else str(type(feature).__name__)
-
-        # Get splits and row counts
-        splits = []
-        num_rows = {}
-        if builder.info.splits:
-            for split_name, split_info in builder.info.splits.items():
-                splits.append(split_name)
-                num_rows[split_name] = split_info.num_examples
-
-        return {
-            "name": dataset_name,
-            "description": builder.info.description or f"Dataset: {dataset_name}",
-            "splits": splits or ["train"],  # Default to train if no splits found
-            "features": features,
-            "num_rows": num_rows,
-            "size_in_bytes": builder.info.dataset_size
-        }
-
-    except Exception as e:
-        logger.error(f"Error getting dataset info for {dataset_name}: {e}")
-        # Fallback to mock data
-        return _get_mock_dataset_info(dataset_name)
-
-def _get_mock_dataset_info(dataset_name: str):
-    """Fallback mock dataset info"""
-    mock_info = {
-        "HuggingFaceH4/ultrafeedback_binarized": {
-            "name": "HuggingFaceH4/ultrafeedback_binarized",
-            "description": "UltraFeedback dataset with binary preferences for DPO training",
-            "splits": ["train", "test"],
-            "features": {
-                "prompt": "string",
-                "chosen": "string",
-                "rejected": "string",
-                "score_chosen": "float",
-                "score_rejected": "float"
-            },
-            "num_rows": {"train": 61135, "test": 2000},
-            "size_in_bytes": 524288000
-        },
-        "HuggingFaceH4/no_robots": {
-            "name": "HuggingFaceH4/no_robots",
-            "description": "High-quality human-generated conversations",
-            "splits": ["train", "test"],
-            "features": {
-                "messages": "list",
-                "category": "string",
-                "source": "string"
-            },
-            "num_rows": {"train": 9500, "test": 500},
-            "size_in_bytes": 104857600
-        },
-        "openai/gsm8k": {
-            "name": "openai/gsm8k",
-            "description": "Grade school math word problems",
-            "splits": ["train", "test"],
-            "features": {
-                "question": "string",
-                "answer": "string"
-            },
-            "num_rows": {"train": 7473, "test": 1319},
-            "size_in_bytes": 52428800
-        }
-    }
-
-    if dataset_name not in mock_info:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-
-    return mock_info[dataset_name]
-
-class SuggestMappingRequest(BaseModel):
-    dataset_name: str
-    training_type: str = "SL"
-
-@router.post("/suggest-mapping")
-async def suggest_field_mapping(request: SuggestMappingRequest):
-    """
-    Suggest field mappings based on dataset structure and training type.
-    """
-    # Get dataset info to see available fields
-    try:
-        info = await get_dataset_info(request.dataset_name)
-    except:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-
-    features = info.get("features", {})
-    suggestions = []
-
-    # Common field name patterns
-    prompt_fields = ["prompt", "question", "input", "instruction", "query", "text", "context"]
-    completion_fields = ["completion", "answer", "output", "response", "target"]
-    chosen_fields = ["chosen", "winner", "preferred", "positive"]
-    rejected_fields = ["rejected", "loser", "not_preferred", "negative"]
-
-    if request.training_type in ["DPO", "RLHF"]:
-        # Need: prompt, chosen, rejected
-        for field in features.keys():
-            field_lower = field.lower()
-            if any(p in field_lower for p in prompt_fields):
-                suggestions.append({"source_field": field, "target_field": "prompt", "confidence": 0.9})
-            if any(p in field_lower for p in chosen_fields):
-                suggestions.append({"source_field": field, "target_field": "chosen", "confidence": 0.9})
-            if any(p in field_lower for p in rejected_fields):
-                suggestions.append({"source_field": field, "target_field": "rejected", "confidence": 0.9})
-    else:
-        # SL/RL: Need prompt, completion
-        for field in features.keys():
-            field_lower = field.lower()
-            if any(p in field_lower for p in prompt_fields):
-                suggestions.append({"source_field": field, "target_field": "prompt", "confidence": 0.9})
-            if any(p in field_lower for p in completion_fields):
-                suggestions.append({"source_field": field, "target_field": "completion", "confidence": 0.9})
-
-    return {"suggestions": suggestions, "features": features}
-
-class PreviewRequest(BaseModel):
-    dataset_name: str
-    split: str = "train"
-    num_samples: int = 5
-    field_mappings: Optional[List[Dict[str, str]]] = None
-
-@router.post("/preview")
-async def preview_dataset(request: PreviewRequest):
-    """
-    Preview dataset with applied field mappings.
-    """
-    dataset_name = request.dataset_name
-    split = request.split
-    num_samples = request.num_samples
-    field_mappings = request.field_mappings
-    if not HUGGINGFACE_AVAILABLE:
-        return _get_mock_preview(dataset_name, split, num_samples)
-
-    try:
-        # Load dataset from HuggingFace
-        dataset = load_dataset(dataset_name, split=split, streaming=True)
-
-        # Get first N samples
-        preview_data = []
-        for i, item in enumerate(dataset):
-            if i >= num_samples:
-                break
-
-            # Apply field mappings if provided
-            mapped_item = {}
-            if field_mappings:
-                for mapping in field_mappings:
-                    source_field = mapping.get("source_field")
-                    target_field = mapping.get("target_field")
-                    if source_field in item:
-                        # Handle nested fields or lists
-                        value = item[source_field]
-                        if isinstance(value, list) and len(value) > 0:
-                            # For message lists, extract text content
-                            if isinstance(value[0], dict):
-                                value = " ".join([msg.get("content", str(msg)) for msg in value])
-                            else:
-                                value = str(value)
-                        mapped_item[target_field] = str(value)[:500]  # Limit preview length
-            else:
-                # No mappings, return raw data
-                mapped_item = {k: str(v)[:500] for k, v in item.items()}
-
-            preview_data.append(mapped_item)
-
-        return {
-            "dataset_name": dataset_name,
-            "split": split,
-            "samples": preview_data,
-            "total_samples": len(preview_data)
-        }
-
-    except Exception as e:
-        logger.error(f"Error previewing dataset {dataset_name}: {e}")
-        return _get_mock_preview(dataset_name, split, num_samples)
-
-def _get_mock_preview(dataset_name: str, split: str, num_samples: int):
-    """Fallback mock preview data"""
-    mock_previews = {
-        "HuggingFaceH4/ultrafeedback_binarized": [
-            {
-                "prompt": "Explain quantum computing in simple terms",
-                "chosen": "Quantum computing uses quantum mechanics principles to process information...",
-                "rejected": "Quantum computing is computers that are really fast and use quantum stuff."
-            },
-            {
-                "prompt": "What are the benefits of exercise?",
-                "chosen": "Regular exercise provides numerous benefits including improved cardiovascular health...",
-                "rejected": "Exercise makes you feel good and lose weight."
-            }
-        ],
-        "HuggingFaceH4/no_robots": [
-            {
-                "prompt": "How do I learn Python programming?",
-                "completion": "To learn Python programming, I recommend: 1) Start with official Python tutorial..."
-            },
-            {
-                "prompt": "What's the best way to prepare for a job interview?",
-                "completion": "Here are key interview preparation steps: 1) Research the company thoroughly..."
-            }
-        ]
-    }
-
-    preview_data = mock_previews.get(dataset_name, [])[:num_samples]
-
-    return {
-        "dataset_name": dataset_name,
-        "split": split,
-        "samples": preview_data,
-        "total_samples": len(preview_data)
-    }
-
-@router.post("/import", response_model=Dict[str, Any])
-async def import_dataset(request: ImportRequest):
-    """
-    Import dataset from HuggingFace Hub.
-    This is the main import function that downloads and converts the dataset.
-    """
-    import_id = f"import_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-    try:
-        # Initialize progress
-        import_progress_store[import_id] = ImportProgress(
-            status="downloading",
-            progress=10,
-            message=f"Downloading {request.dataset_name} ({request.split} split)...",
-            samples_processed=0,
-            total_samples=0
-        )
-
-        if not HUGGINGFACE_AVAILABLE:
-            # Use mock data if library not available
-            logger.warning("HuggingFace datasets library not available, using mock data")
-            return await _import_mock_dataset(request, import_id)
-
-        # Download dataset from HuggingFace
-        logger.info(f"Loading dataset: {request.dataset_name}, split: {request.split}")
-        dataset = load_dataset(
-            request.dataset_name,
-            request.subset,
-            split=request.split,
-            streaming=False  # Download full dataset
-        )
-
-        import_progress_store[import_id].progress = 30
-        import_progress_store[import_id].message = "Download complete. Converting to app format..."
-
-        # Convert data using field mappings
-        converted_data = []
-        num_samples = min(request.max_samples or len(dataset), len(dataset))
-
-        import_progress_store[import_id].status = "converting"
-        import_progress_store[import_id].progress = 40
-        import_progress_store[import_id].total_samples = num_samples
-
-        for i, item in enumerate(dataset):
-            if i >= num_samples:
-                break
-
-            # Map fields from source dataset to target format
-            mapped_item = {}
-            for mapping in request.field_mappings:
-                source_field = mapping.source_field
-                target_field = mapping.target_field
-
-                if source_field in item:
-                    value = item[source_field]
-
-                    # Handle different data types
-                    if isinstance(value, list):
-                        # For message lists, extract text content
-                        if len(value) > 0 and isinstance(value[0], dict):
-                            # List of message dicts
-                            value = " ".join([msg.get("content", str(msg)) for msg in value])
-                        else:
-                            value = str(value)
-                    elif not isinstance(value, str):
-                        value = str(value)
-
-                    mapped_item[target_field] = value
-
-            if mapped_item:  # Only add if we mapped at least one field
-                converted_data.append(mapped_item)
-
-            # Update progress every 100 items
-            if i % 100 == 0:
-                import_progress_store[import_id].samples_processed = i
-                import_progress_store[import_id].progress = 40 + int((i / num_samples) * 50)
-
-        # Save to data storage
-        import_progress_store[import_id].status = "saving"
-        import_progress_store[import_id].progress = 90
-        import_progress_store[import_id].message = "Saving dataset to storage..."
-
-        data_dir = os.path.join(os.path.dirname(__file__), '../data')
-        os.makedirs(data_dir, exist_ok=True)
-
-        dataset_filename = f"{request.dataset_name.replace('/', '_')}_{request.split}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
-        dataset_path = os.path.join(data_dir, dataset_filename)
-
-        with open(dataset_path, 'w', encoding='utf-8') as f:
-            for item in converted_data:
-                f.write(json.dumps(item, ensure_ascii=False) + '\n')
-
-        # Complete
-        import_progress_store[import_id].status = "complete"
-        import_progress_store[import_id].progress = 100
-        import_progress_store[import_id].message = "Import complete!"
-        import_progress_store[import_id].samples_processed = len(converted_data)
-        import_progress_store[import_id].total_samples = len(converted_data)
-
-        logger.info(f"Successfully imported {len(converted_data)} samples from {request.dataset_name}")
-
-        return {
-            "import_id": import_id,
-            "dataset_id": dataset_filename,
-            "dataset_name": request.dataset_name,
-            "split": request.split,
-            "num_samples": len(converted_data),
-            "file_path": dataset_path,
-            "status": "complete"
-        }
-
-    except Exception as e:
-        logger.error(f"Import failed for {request.dataset_name}: {e}", exc_info=True)
-        import_progress_store[import_id] = ImportProgress(
-            status="error",
-            progress=0,
-            message=f"Import failed: {str(e)}",
-            samples_processed=0,
-            total_samples=0
-        )
-        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
-
-async def _import_mock_dataset(request: ImportRequest, import_id: str):
-    """Fallback mock import when HuggingFace library not available"""
-    await asyncio.sleep(1)
-    import_progress_store[import_id].progress = 30
-    import_progress_store[import_id].message = "Download complete. Converting to app format..."
-
-    await asyncio.sleep(1)
-    import_progress_store[import_id].status = "converting"
-    import_progress_store[import_id].progress = 50
-
-    # Convert data using field mappings
-    mock_data = []
-    num_samples = request.max_samples or 100
-
-    for i in range(num_samples):
-        item = {}
-        for mapping in request.field_mappings:
-            if mapping.target_field == "prompt":
-                item["prompt"] = f"Sample prompt {i+1} from {request.dataset_name}"
-            elif mapping.target_field == "completion":
-                item["completion"] = f"Sample completion {i+1}"
-            elif mapping.target_field == "chosen":
-                item["chosen"] = f"Sample chosen response {i+1}"
-            elif mapping.target_field == "rejected":
-                item["rejected"] = f"Sample rejected response {i+1}"
-
-        mock_data.append(item)
-
-        if i % 10 == 0:
-            import_progress_store[import_id].samples_processed = i
-            import_progress_store[import_id].total_samples = num_samples
-            import_progress_store[import_id].progress = 50 + int((i / num_samples) * 40)
-
-    await asyncio.sleep(1)
-    import_progress_store[import_id].status = "saving"
-    import_progress_store[import_id].progress = 90
-    import_progress_store[import_id].message = "Saving dataset to storage..."
-
-    data_dir = os.path.join(os.path.dirname(__file__), '../data')
-    os.makedirs(data_dir, exist_ok=True)
-
-    dataset_filename = f"{request.dataset_name.replace('/', '_')}_{request.split}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
-    dataset_path = os.path.join(data_dir, dataset_filename)
-
-    with open(dataset_path, 'w') as f:
-        for item in mock_data:
-            f.write(json.dumps(item) + '\n')
-
-    import_progress_store[import_id].status = "complete"
-    import_progress_store[import_id].progress = 100
-    import_progress_store[import_id].message = "Import complete!"
-    import_progress_store[import_id].samples_processed = num_samples
-    import_progress_store[import_id].total_samples = num_samples
-
-    return {
-        "import_id": import_id,
-        "dataset_id": dataset_filename,
-        "dataset_name": request.dataset_name,
-        "split": request.split,
-        "num_samples": num_samples,
-        "file_path": dataset_path,
-        "status": "complete"
-    }
 
 @router.get("/import-progress/{import_id}")
-async def get_import_progress(import_id: str):
-    """
-    Get progress of an import operation.
-    """
-    if import_id not in import_progress_store:
-        raise HTTPException(status_code=404, detail="Import ID not found")
-
-    return import_progress_store[import_id]
-
-@router.get("/popular")
-async def get_popular_datasets():
-    """
-    Get list of popular/recommended datasets for different training types.
-    """
-    return {
-        "DPO": [
-            {
-                "name": "HuggingFaceH4/ultrafeedback_binarized",
-                "description": "Binary preference data for DPO",
-                "samples": 61135,
-                "recommended": True
-            },
-            {
-                "name": "Anthropic/hh-rlhf",
-                "description": "Helpful and harmless preferences",
-                "samples": 160000,
-                "recommended": True
-            }
-        ],
-        "SL": [
-            {
-                "name": "HuggingFaceH4/no_robots",
-                "description": "High-quality conversations",
-                "samples": 9500,
-                "recommended": True
-            },
-            {
-                "name": "tatsu-lab/alpaca",
-                "description": "Instruction-following demonstrations",
-                "samples": 52000,
-                "recommended": True
-            }
-        ],
-        "Code": [
-            {
-                "name": "bigcode/the-stack",
-                "description": "Large code dataset",
-                "samples": 1000000,
-                "recommended": False  # Very large
-            },
-            {
-                "name": "openai/humaneval",
-                "description": "Python code evaluation",
-                "samples": 164,
-                "recommended": True
-            }
-        ],
-        "Math": [
-            {
-                "name": "openai/gsm8k",
-                "description": "Grade school math problems",
-                "samples": 8792,
-                "recommended": True
-            }
-        ]
-    }
+async def import_progress(import_id: str):
+    if import_id not in _progress:
+        raise HTTPException(404, "Import id not found")
+    return _progress[import_id]
