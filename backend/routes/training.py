@@ -91,6 +91,30 @@ async def start_training(config: TrainingConfig, x_api_key: Optional[str] = Head
     return {"job_id": job_id, "status": "queued", "job": job}
 
 
+def _friendly_training_error(e: Exception) -> str:
+    """Turn an SDK exception into something a person can act on.
+
+    The raw messages are opaque — a failed run reported only "Connection error.",
+    which is indistinguishable from a bad key unless you already know the SDK
+    raises a different type for auth. Each of these means a different fix.
+    """
+    name = type(e).__name__
+    raw = getattr(e, "message", None) or str(e)
+
+    if "must start with" in raw and "tml-" in raw:
+        return ("That Tinker API key looks malformed — real keys start with 'tml-'. "
+                "Check the key in Settings.")
+    if name == "AuthenticationError" or "Unable to validate credential" in raw:
+        return ("Tinker rejected that API key (401). It may be inactive, revoked, or from a "
+                "different account — check it in Settings and confirm it's active.")
+    if name == "APIConnectionError" or raw.strip() == "Connection error.":
+        return ("Couldn't reach the Tinker API (tinker.thinkingmachines.dev). This is a network "
+                "problem, not your key — check your connection and try again.")
+    if name == "RateLimitError":
+        return "Tinker rate limit reached. Wait a moment and start the run again."
+    return raw
+
+
 async def _run_job(job_id: str, config: TrainingConfig, model_name: str, api_key: Optional[str]):
     kind = config.training_type.lower()
 
@@ -158,7 +182,7 @@ async def _run_job(job_id: str, config: TrainingConfig, model_name: str, api_key
         db.update_job(job_id, status="cancelled", completed_at=_now(), status_message="Cancelled")
         raise
     except Exception as e:
-        reason = getattr(e, "message", None) or str(e)
+        reason = _friendly_training_error(e)
         logger.error(f"Job {job_id} failed: {reason}")
         db.update_job(job_id, status="failed", completed_at=_now(), error=reason, status_message="Failed")
         hub.publish({"type": "job_status", "data": {"job_id": job_id, "status": "failed", "error": reason}})

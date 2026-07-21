@@ -58,6 +58,8 @@ export default function Train() {
   const [jobId, setJobId] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
   const [history, setHistory] = useState<{ step: number; ts: number; data: any }[]>([])
+  /** Set when the job poll has missed several times — usually a dead backend. */
+  const [lostContact, setLostContact] = useState(false)
 
   // --- data ------------------------------------------------------------------
   const dsQuery = useAsync(() => api.datasets.list(), [dataVersion])
@@ -126,6 +128,8 @@ export default function Train() {
     if (!jobId) return
     let active = true
     let timer: ReturnType<typeof setTimeout> | null = null
+    let misses = 0
+    setLostContact(false)
     const tick = async () => {
       if (!active) return
       try {
@@ -134,10 +138,18 @@ export default function Train() {
           api.training.metrics(jobId).catch(() => ({ history: [] as any[] })),
         ])
         if (!active) return
+        misses = 0
+        setLostContact(false)
         setJob(j)
         if (m && Array.isArray((m as any).history)) setHistory((m as any).history)
         if (TERMINAL.includes(j.status)) { active = false; bump(); return }
-      } catch { /* keep retrying */ }
+      } catch {
+        // Silently retrying forever leaves a frozen progress bar that looks
+        // identical to a running job — which is exactly how a dead backend
+        // reads as "stuck at 0%". Say so after a few consecutive misses.
+        misses += 1
+        if (active && misses >= 3) setLostContact(true)
+      }
       if (active) timer = setTimeout(tick, 1200)
     }
     tick()
@@ -531,6 +543,7 @@ export default function Train() {
               primaryKey={primaryKey}
               primaryLabel={primaryLabel}
               error={job?.error ?? null}
+              lostContact={lostContact}
               onCancel={cancel}
               onPlayground={() => setView('playground')}
               onAnalytics={() => setView('analytics')}
@@ -616,12 +629,13 @@ function ProgressPanel(props: {
   chartData: { step: number; loss?: number; reward?: number }[]; hasChart: boolean
   primaryKey: 'loss' | 'reward'; primaryLabel: string
   error: string | null
+  lostContact: boolean
   onCancel: () => void; onPlayground: () => void; onAnalytics: () => void
 }) {
   const {
     status, statusMessage, step, total, pct, isDemo, kind,
     lastLoss, lastReward, lastMargin, lastPrefAcc, chartData, hasChart,
-    primaryKey, primaryLabel, error, onCancel, onPlayground, onAnalytics,
+    primaryKey, primaryLabel, error, lostContact, onCancel, onPlayground, onAnalytics,
   } = props
   const ss = statusStyle(status)
   const running = status === 'running' || status === 'queued'
@@ -705,6 +719,19 @@ function ProgressPanel(props: {
             )}
             <Button variant="outline" icon={<BarChart3 className="w-4 h-4" />} onClick={onAnalytics}>View analytics</Button>
           </div>
+        </div>
+      )}
+
+      {lostContact && !TERMINAL.includes(status) && (
+        <div className="rounded-xl bg-amber-soft/60 border border-amber/40 p-3 text-sm text-amber-ink">
+          <div className="font-semibold flex items-center gap-1.5">
+            <TriangleAlert className="w-4 h-4" /> Lost contact with the backend
+          </div>
+          <p className="mt-1 text-xs">
+            The progress below is frozen at the last value received — it isn’t live, and the run may
+            have already finished or failed. Check the backend is still running
+            (<span className="font-mono">./START_UI.sh</span>); this clears itself the moment it answers again.
+          </p>
         </div>
       )}
 

@@ -191,9 +191,13 @@ async def run_supervised(config, examples, report: ReportFn, should_cancel: Canc
     max_length = int(config.get("max_length", 1024))
 
     report(0, {"mode": "real"}, f"Connecting to Tinker and loading {base_model}…")
-    service = tinker.ServiceClient()
+    # ServiceClient() and get_tokenizer() are synchronous and do network I/O
+    # (auth handshake, tokenizer download). Called directly they block the whole
+    # event loop — every other request in the app hangs until they return, and a
+    # failure here takes the server down with it rather than just failing the job.
+    service = await asyncio.to_thread(tinker.ServiceClient)
     training_client = await service.create_lora_training_client_async(base_model=base_model, rank=rank)
-    tokenizer = training_client.get_tokenizer()
+    tokenizer = await asyncio.to_thread(training_client.get_tokenizer)
     renderer_name = _recommended_renderer_name(base_model, R, config.get("renderer_name"))
     renderer = R.get_renderer(renderer_name, tokenizer)
     report(0, {"mode": "real", "renderer": renderer_name}, "Rendering dataset into training examples…")
@@ -208,12 +212,18 @@ async def run_supervised(config, examples, report: ReportFn, should_cancel: Canc
         model_input, weights = renderer.build_supervised_example(messages, train_on_what=train_on)
         return types.Datum(model_input=model_input, loss_fn_inputs={"weights": weights})
 
-    data = []
-    for messages in examples:
-        try:
-            data.append(build_datum(messages))
-        except Exception as e:
-            logger.warning(f"Skipping example that failed to render: {e}")
+    def _render_all():
+        # Tokenising every example is CPU-bound and scales with dataset size —
+        # on the event loop it freezes the app for the whole render.
+        out = []
+        for messages in examples:
+            try:
+                out.append(build_datum(messages))
+            except Exception as e:
+                logger.warning(f"Skipping example that failed to render: {e}")
+        return out
+
+    data = await asyncio.to_thread(_render_all)
     if not data:
         raise TinkerAPIException("render", "Every example failed to render — check the dataset format.")
 
@@ -267,9 +277,13 @@ async def run_dpo(config, examples, report: ReportFn, should_cancel: CancelFn) -
     beta = float(config.get("dpo_beta", 0.1))
 
     report(0, {"mode": "real"}, f"Connecting to Tinker and loading {base_model}…")
-    service = tinker.ServiceClient()
+    # ServiceClient() and get_tokenizer() are synchronous and do network I/O
+    # (auth handshake, tokenizer download). Called directly they block the whole
+    # event loop — every other request in the app hangs until they return, and a
+    # failure here takes the server down with it rather than just failing the job.
+    service = await asyncio.to_thread(tinker.ServiceClient)
     training_client = await service.create_lora_training_client_async(base_model=base_model, rank=rank)
-    tokenizer = training_client.get_tokenizer()
+    tokenizer = await asyncio.to_thread(training_client.get_tokenizer)
     renderer_name = _recommended_renderer_name(base_model, R, config.get("renderer_name"))
     renderer = R.get_renderer(renderer_name, tokenizer)
     train_on = getattr(R, "TrainOnWhat").LAST_ASSISTANT_MESSAGE
@@ -378,9 +392,13 @@ async def run_rl(config, examples, report: ReportFn, should_cancel: CancelFn) ->
     temperature = float(config.get("rl_temperature", 1.0))
 
     report(0, {"mode": "real"}, f"Connecting to Tinker and loading {base_model}…")
-    service = tinker.ServiceClient()
+    # ServiceClient() and get_tokenizer() are synchronous and do network I/O
+    # (auth handshake, tokenizer download). Called directly they block the whole
+    # event loop — every other request in the app hangs until they return, and a
+    # failure here takes the server down with it rather than just failing the job.
+    service = await asyncio.to_thread(tinker.ServiceClient)
     training_client = await service.create_lora_training_client_async(base_model=base_model, rank=rank)
-    tokenizer = training_client.get_tokenizer()
+    tokenizer = await asyncio.to_thread(training_client.get_tokenizer)
     renderer_name = _recommended_renderer_name(base_model, R, config.get("renderer_name"))
     renderer = R.get_renderer(renderer_name, tokenizer)
     adam = types.AdamParams(learning_rate=lr)
