@@ -57,6 +57,16 @@ export interface Dataset {
   schema_notes?: string[]
 }
 
+/** One row-filter rule applied at import time, before field mapping. */
+export interface FilterRule {
+  column: string
+  /** non_empty | not_one_of | gte | lte | equals | not_equals | contains | not_contains | is_true | is_false */
+  op: string
+  value?: string | number
+  /** Only present on suggestions — why the backend proposed this rule. */
+  why?: string
+}
+
 /** A training or Arena run (backend: db.get_job). */
 export interface Job {
   id: string
@@ -233,12 +243,15 @@ export const api = {
     /** Parse a file and report columns, fit, secrets — storing nothing permanent. */
     inspect: (form: FormData) => request<any>('/api/datasets/inspect', { form }),
     /** Show the training examples a given field mapping would actually produce. */
-    previewMapping: (body: { staging_id: string; training_type: string; mapping: Record<string, string> }) =>
-      request<any>('/api/datasets/preview-mapping', { body }),
+    previewMapping: (body: {
+      staging_id: string; training_type: string
+      mapping: Record<string, string>; filters?: FilterRule[]
+    }) => request<any>('/api/datasets/preview-mapping', { body }),
     /** Promote an inspected file into a real, trainable dataset. */
     commit: (body: {
       staging_id: string; name: string; training_type: string
       mapping: Record<string, string>
+      filters?: FilterRule[]
       train_split?: number; val_split?: number; test_split?: number
       secrets_action?: 'keep' | 'scrub' | 'drop_rows'
     }) => request<any>('/api/datasets/commit', { body }),
@@ -312,6 +325,7 @@ export const api = {
       subset?: string
       training_type?: string
       field_mappings?: Array<Record<string, any>>
+      filters?: FilterRule[]
       max_samples?: number
       name?: string
     }) => request<{ dataset: Dataset }>('/api/huggingface/import', { body }),

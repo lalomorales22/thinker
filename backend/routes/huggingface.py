@@ -383,10 +383,15 @@ class PreviewRequest(BaseModel):
 
 @router.post("/preview")
 async def preview(req: PreviewRequest):
-    rows = (await fetch_rows(req.dataset_name, req.split, req.subset, max(1, min(req.num_samples, 20))))[0]
-    trimmed = [{k: (v if not isinstance(v, str) else v[:600]) for k, v in r.items()} for r in rows]
+    # Sample wider than we display so the filter suggestions have enough rows to
+    # spot junk placeholders and judge a score column — but only return a few.
+    show = max(1, min(req.num_samples, 20))
+    rows = (await fetch_rows(req.dataset_name, req.split, req.subset, max(show, 100)))[0]
+    trimmed = [{k: (v if not isinstance(v, str) else v[:600]) for k, v in r.items()}
+               for r in rows[:show]]
     return {"dataset_name": req.dataset_name, "rows": trimmed,
-            "columns": list(rows[0].keys()) if rows else []}
+            "columns": list(rows[0].keys()) if rows else [],
+            "suggested_filters": datautil.suggest_filters(rows)}
 
 
 class FieldMapping(BaseModel):
@@ -400,6 +405,8 @@ class ImportRequest(BaseModel):
     subset: Optional[str] = None
     training_type: str = "sl"                    # sl | dpo | rl
     field_mappings: list[FieldMapping] = Field(default_factory=list)
+    # Row filters applied before mapping. [{"column","op","value"}]
+    filters: list[dict[str, Any]] = Field(default_factory=list)
     max_samples: int = 1000
     name: Optional[str] = None
 
@@ -419,6 +426,10 @@ async def import_dataset(req: ImportRequest):
         # Field mappings are ADDITIVE: keep every original column AND add the
         # mapped aliases. This way a dataset whose useful data lives in an
         # unmapped column (e.g. no_robots' `messages`) still works.
+        raw_rows, _fstats = datautil.apply_filters(raw_rows, req.filters)
+        if not raw_rows:
+            raise HTTPException(400, "Every row was removed by the filters. Loosen them and try again.")
+
         mappings = {m.source_field: m.target_field for m in req.field_mappings}
         rows: list[dict[str, Any]] = []
         for item in raw_rows:

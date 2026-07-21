@@ -3,7 +3,7 @@ import {
   Database, UploadCloud, PencilLine, DownloadCloud, Plus, Trash2, Eye,
   Rocket, Search, ArrowLeft, Heart, Download, X, FileJson, AlertCircle,
 } from 'lucide-react'
-import { api, Dataset } from '../lib/api'
+import { api, Dataset, FilterRule } from '../lib/api'
 import { useAsync } from '../lib/hooks'
 import { useStore } from '../store/useStore'
 import { InfoTip } from '../lib/glossary'
@@ -60,7 +60,10 @@ function guessColumn(target: string, cols: string[]): string {
   const cands = SUGGEST[target] || [target]
   const lower = cols.map(c => c.toLowerCase())
   for (const c of cands) { const i = lower.indexOf(c); if (i >= 0) return cols[i] }
-  for (const c of cands) { const i = lower.findIndex(x => x.includes(c)); if (i >= 0) return cols[i] }
+  // Fall back to a prefix match, not a substring one. `includes` matched "text"
+  // inside "selftext" and confidently proposed a Reddit joke's punchline as the
+  // prompt — a wrong guess is worse than none, because it looks considered.
+  for (const c of cands) { const i = lower.findIndex(x => x.startsWith(c)); if (i >= 0) return cols[i] }
   return ''
 }
 
@@ -197,6 +200,118 @@ function PreviewModal({ id, name, onClose }: { id: string; name: string; onClose
 }
 
 // --- upload modal -----------------------------------------------------------
+// --- row filters ------------------------------------------------------------
+
+const FILTER_OPS: { value: string; label: string; needsValue: boolean }[] = [
+  { value: 'non_empty', label: 'is not empty / [removed]', needsValue: false },
+  { value: 'gte', label: 'is at least', needsValue: true },
+  { value: 'lte', label: 'is at most', needsValue: true },
+  { value: 'is_false', label: 'is false', needsValue: false },
+  { value: 'is_true', label: 'is true', needsValue: false },
+  { value: 'equals', label: 'equals', needsValue: true },
+  { value: 'not_equals', label: 'does not equal', needsValue: true },
+  { value: 'contains', label: 'contains', needsValue: true },
+  { value: 'not_contains', label: 'does not contain', needsValue: true },
+  { value: 'not_one_of', label: 'is none of (comma-separated)', needsValue: true },
+]
+
+const needsValue = (op: string) => FILTER_OPS.find(o => o.value === op)?.needsValue ?? true
+const sameRule = (a: FilterRule, b: FilterRule) =>
+  a.column === b.column && a.op === b.op && String(a.value ?? '') === String(b.value ?? '')
+
+interface FilterStats {
+  before: number; after: number; dropped: number
+  by_rule: { column: string; op: string; value: any; dropped: number }[]
+}
+
+/**
+ * Keep-rules applied before mapping.
+ *
+ * Schema validation can't catch a row that's structurally fine but worthless —
+ * a Reddit dump puts the literal string "[removed]" where a body used to be,
+ * and it would train as if it were a real answer. Suggestions come from the
+ * backend having actually looked at the sample, so they only appear when the
+ * data shows they're needed.
+ */
+function FilterRules({ columns, rules, suggested, stats, onChange }: {
+  columns: string[]
+  rules: FilterRule[]
+  suggested?: FilterRule[]
+  stats?: FilterStats | null
+  onChange: (r: FilterRule[]) => void
+}) {
+  const unused = (suggested ?? []).filter(s => !rules.some(r => sameRule(r, s)))
+
+  return (
+    <div className="space-y-2.5">
+      {unused.length > 0 && (
+        <div className="rounded-xl2 border border-orange/30 bg-orange-soft/40 p-3 space-y-2">
+          <div className="text-xs font-semibold text-ink">Suggested from your data</div>
+          {unused.map((s, i) => (
+            <div key={i} className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-mono text-[11px] text-ink">
+                  {s.column} {FILTER_OPS.find(o => o.value === s.op)?.label ?? s.op}{' '}
+                  {needsValue(s.op) ? String(s.value ?? '') : ''}
+                </div>
+                {s.why && <div className="text-[11px] text-ink-soft mt-0.5">{s.why}</div>}
+              </div>
+              <Button size="xs" variant="outline" className="shrink-0"
+                onClick={() => onChange([...rules, { column: s.column, op: s.op, value: s.value }])}>
+                Add
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rules.map((r, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <Select className="flex-1" value={r.column}
+            onChange={e => onChange(rules.map((x, j) => j === i ? { ...x, column: e.target.value } : x))}>
+            <option value="">— column —</option>
+            {columns.map(c => <option key={c} value={c}>{c}</option>)}
+          </Select>
+          <Select className="flex-1" value={r.op}
+            onChange={e => onChange(rules.map((x, j) => j === i ? { ...x, op: e.target.value } : x))}>
+            {FILTER_OPS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </Select>
+          {needsValue(r.op) && (
+            <Input className="w-28" value={String(r.value ?? '')}
+              onChange={e => onChange(rules.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} />
+          )}
+          <IconButton label="Remove filter" onClick={() => onChange(rules.filter((_, j) => j !== i))}>
+            <X className="w-4 h-4" />
+          </IconButton>
+        </div>
+      ))}
+
+      <div className="flex items-center justify-between gap-3">
+        <Button size="xs" variant="outline" icon={<Plus className="w-3.5 h-3.5" />}
+          onClick={() => onChange([...rules, { column: columns[0] ?? '', op: 'non_empty' }])}>
+          Add a filter
+        </Button>
+        {stats && stats.dropped > 0 && (
+          <span className="text-[11px] text-ink-mute">
+            {fmtInt(stats.after)} of {fmtInt(stats.before)} sampled rows kept
+            {stats.after === 0 && ' — nothing survives these filters'}
+          </span>
+        )}
+      </div>
+
+      {stats?.by_rule?.some(b => b.dropped > 0) && (
+        <ul className="space-y-0.5">
+          {stats.by_rule.filter(b => b.dropped > 0).map((b, i) => (
+            <li key={i} className="text-[11px] font-mono text-ink-mute">
+              {b.column} {b.op} {b.value ?? ''} — dropped {fmtInt(b.dropped)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 /** The fields each training type needs filled, in the order they're shown. */
 const MAP_TARGETS: Record<TT, string[]> = {
   sl: ['prompt', 'completion'],
@@ -218,6 +333,7 @@ interface Inspection {
     labels: Record<string, number>
   }
   suggested_mapping: Record<string, Record<string, string>>
+  suggested_filters?: FilterRule[]
   sample_rows: any[]
 }
 
@@ -240,9 +356,10 @@ function UploadModal({ templates, onClose }: { templates: Templates | null; onCl
   const [name, setName] = useState('')
   const [type, setType] = useState<TT>('sl')
   const [mapping, setMapping] = useState<Record<string, string>>({})
+  const [filters, setFilters] = useState<FilterRule[]>([])
   const [secretsAction, setSecretsAction] = useState<SecretsAction>('scrub')
   const [splits, setSplits] = useState({ train: 80, val: 10, test: 10 })
-  const [preview, setPreview] = useState<{ examples: any[]; usable: number; sampled: number; notes: string[]; ok: boolean } | null>(null)
+  const [preview, setPreview] = useState<{ examples: any[]; usable: number; sampled: number; notes: string[]; ok: boolean; filter_stats?: FilterStats } | null>(null)
   const [busy, setBusy] = useState(false)
   const sum = splits.train + splits.val + splits.test
 
@@ -267,11 +384,11 @@ function UploadModal({ templates, onClose }: { templates: Templates | null; onCl
   useEffect(() => {
     if (!insp) return
     let alive = true
-    api.datasets.previewMapping({ staging_id: insp.staging_id, training_type: type, mapping })
+    api.datasets.previewMapping({ staging_id: insp.staging_id, training_type: type, mapping, filters })
       .then(r => { if (alive) setPreview(r) })
       .catch(() => { if (alive) setPreview(null) })
     return () => { alive = false }
-  }, [insp, type, mapping])
+  }, [insp, type, mapping, filters])
 
   function changeType(tt: TT) {
     setType(tt)
@@ -291,7 +408,7 @@ function UploadModal({ templates, onClose }: { templates: Templates | null; onCl
     setBusy(true)
     try {
       const res = await api.datasets.commit({
-        staging_id: insp.staging_id, name: name.trim(), training_type: type, mapping,
+        staging_id: insp.staging_id, name: name.trim(), training_type: type, mapping, filters,
         train_split: splits.train, val_split: splits.val, test_split: splits.test,
         secrets_action: secretsAction,
       })
@@ -408,6 +525,12 @@ function UploadModal({ templates, onClose }: { templates: Templates | null; onCl
               </div>
             ))}
           </div>
+        </Field>
+
+        <Field label="Drop rows you don’t want"
+          hint="Applied before mapping. Schema checks can’t tell a real answer from the literal text “[removed]”.">
+          <FilterRules columns={insp.columns} rules={filters} suggested={insp.suggested_filters}
+            stats={preview?.filter_stats} onChange={setFilters} />
         </Field>
 
         <div>
@@ -563,6 +686,8 @@ function HFConfig({ name, presetSubset, onBack, onClose }:
   const [subset, setSubset] = useState<string>(presetSubset || '')
   const [mapping, setMapping] = useState<Record<string, string>>({})
   const [maxSamples, setMaxSamples] = useState(1000)
+  const [filters, setFilters] = useState<FilterRule[]>([])
+  const [suggestedFilters, setSuggestedFilters] = useState<FilterRule[]>([])
   const [datasetName, setDatasetName] = useState('')
   const [preview, setPreview] = useState<PreviewData | null>(null)
   const [previewing, setPreviewing] = useState(false)
@@ -598,6 +723,7 @@ function HFConfig({ name, presetSubset, onBack, onClose }:
     try {
       const res = await api.hf.preview({ dataset_name: name, split, subset: subset || undefined, num_samples: 5 })
       setPreview({ columns: res.columns || [], rows: res.rows || [] })
+      setSuggestedFilters(res.suggested_filters || [])
     } catch (e: any) { toast(e.message, 'error') } finally { setPreviewing(false) }
   }
 
@@ -606,7 +732,8 @@ function HFConfig({ name, presetSubset, onBack, onClose }:
     try {
       const res = await api.hf.import({
         dataset_name: name, split, subset: subset || undefined, training_type: type,
-        field_mappings: buildMappings(), max_samples: Math.max(1, maxSamples), name: datasetName.trim() || undefined,
+        field_mappings: buildMappings(), filters, max_samples: Math.max(1, maxSamples),
+        name: datasetName.trim() || undefined,
       })
       bump()
       toast(`Imported ${fmtInt(res?.dataset?.num_samples)} examples — it’s ready to train.`, 'ok')
@@ -669,7 +796,14 @@ function HFConfig({ name, presetSubset, onBack, onClose }:
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field label="How many examples?" hint="We stream just this many — no giant download.">
+            <Field label="Drop rows you don’t want"
+              className="sm:col-span-2"
+              hint="Applied before mapping. Press Preview first so Thinker can look at the data and suggest filters.">
+              <FilterRules columns={info?.field_paths || Object.keys(info?.features || {})}
+                rules={filters} suggested={suggestedFilters} onChange={setFilters} />
+            </Field>
+
+            <Field label="How many examples?" hint="Filters run AFTER this many rows are streamed, so aggressive filters on a big dataset may leave few.">
               <Input type="number" min={1} value={maxSamples}
                 onChange={e => setMaxSamples(Number(e.target.value) || 1)} />
             </Field>

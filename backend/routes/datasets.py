@@ -213,6 +213,7 @@ async def inspect_dataset(file: UploadFile = File(...), format: str = Form("")):
         "suggested_mapping": {
             tt: datautil.suggest_mapping(columns, tt) for tt in ("sl", "dpo", "rl")
         },
+        "suggested_filters": datautil.suggest_filters(rows),
         "sample_rows": rows[:5],
     }
 
@@ -223,6 +224,8 @@ class CommitRequest(BaseModel):
     training_type: str = "sl"
     # target field -> source column (dot-paths allowed, e.g. "message.content")
     mapping: dict[str, str] = {}
+    # Row filters, applied before mapping. [{"column","op","value"}]
+    filters: list[dict[str, Any]] = []
     train_split: int = 80
     val_split: int = 10
     test_split: int = 10
@@ -245,6 +248,12 @@ async def commit_staged(req: CommitRequest):
     rows = datautil.load_rows(info["path"], info["fmt"])
     if not rows:
         raise HTTPException(400, "No rows found in the staged file.")
+
+    # Filter first: dropping junk rows before mapping means the mapping only
+    # ever sees rows that are actually going to be trained on.
+    rows, filter_stats = datautil.apply_filters(rows, req.filters)
+    if not rows:
+        raise HTTPException(400, "Every row was removed by the filters. Loosen them and try again.")
 
     # Apply mapping additively — keep the original columns and add the aliases,
     # so data living in an unmapped column still reaches the trainer.
@@ -299,7 +308,7 @@ async def commit_staged(req: CommitRequest):
         "schema_ok": check["ok"], "schema_notes": check["notes"],
         "meta": {"original_filename": info["filename"], "mapping": req.mapping,
                  "secrets_found": scan["count"], "secrets_action": req.secrets_action,
-                 "redactions": redactions},
+                 "redactions": redactions, "filters": req.filters, "filter_stats": filter_stats},
         "created_at": _now(),
     }
     dataset = db.add_dataset(rec)
@@ -319,6 +328,7 @@ class PreviewMappingRequest(BaseModel):
     staging_id: str
     training_type: str = "sl"
     mapping: dict[str, str] = {}
+    filters: list[dict[str, Any]] = []
 
 
 @router.post("/preview-mapping")
@@ -332,7 +342,9 @@ async def preview_mapping(req: PreviewMappingRequest):
     if not info:
         raise HTTPException(404, "That upload has expired. Choose the file again.")
 
-    rows = datautil.load_rows(info["path"], info["fmt"], limit=50)
+    # Sample wider than we display, because filters may remove most of it.
+    rows = datautil.load_rows(info["path"], info["fmt"], limit=400)
+    rows, filter_stats = datautil.apply_filters(rows, req.filters)
     if req.mapping:
         mapped = []
         for item in rows:
@@ -350,7 +362,7 @@ async def preview_mapping(req: PreviewMappingRequest):
     check = datautil.validate(rows, tt if tt in ("sl", "dpo", "rl") else "sl")
     examples = list(itertools.islice(datautil.iter_examples(rows, tt), 3))
     return {"examples": examples, "usable": check["usable"], "sampled": len(rows),
-            "notes": check["notes"], "ok": check["ok"]}
+            "notes": check["notes"], "ok": check["ok"], "filter_stats": filter_stats}
 
 
 class CreateRequest(BaseModel):

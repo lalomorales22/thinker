@@ -111,7 +111,15 @@ def get_path(obj: Any, path: str) -> Any:
     non-integer segment lands on a list of dicts — collecting that key from each
     item (e.g. "messages.content" -> [content, content, ...]). Returns None when
     the path can't be resolved.
+
+    A literal key wins over path traversal. Real datasets ship flat columns with
+    dots in the name — the Reddit dumps use "subreddit.nsfw" — and splitting
+    those would look up a nested object that was never there, quietly returning
+    None for every row.
     """
+    if isinstance(obj, dict) and path in obj:
+        return obj[path]
+
     cur = obj
     for seg in str(path).split("."):
         if cur is None:
@@ -350,3 +358,149 @@ def fit_from_rows(rows: list[dict[str, Any]], prefer: Optional[str] = None) -> d
     return {"status": "partial", "training_type": best, "columns": columns, "also_fits": also,
             "detail": f"{usable} of {total} sampled rows have the fields needed; the rest would be skipped.",
             "per_type": per_type}
+
+
+# --- row filtering -----------------------------------------------------------
+
+# Values that look like data but are really an absence of it. Real exports are
+# full of these — a Reddit dump uses "[removed]" where a body used to be, and it
+# passes every schema check while teaching a model to answer with nonsense.
+JUNK_VALUES = {
+    "", "[removed]", "[deleted]", "[removed by reddit]", "[removed by moderator]",
+    "n/a", "na", "null", "none", "nan", "-", "--", "unknown", "undefined",
+}
+
+FILTER_OPS = (
+    "non_empty",      # drop blanks and JUNK_VALUES
+    "not_one_of",     # drop rows whose value is in `value` (list or comma string)
+    "gte", "lte",     # numeric threshold
+    "equals", "not_equals",
+    "contains", "not_contains",
+    "is_true", "is_false",
+)
+
+
+def _as_float(v: Any) -> Optional[float]:
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_bool(v: Any) -> Optional[bool]:
+    s = str(v).strip().lower()
+    if s in ("true", "1", "yes", "y", "t"):
+        return True
+    if s in ("false", "0", "no", "n", "f"):
+        return False
+    return None
+
+
+def _passes(value: Any, op: str, target: Any) -> bool:
+    """Does one value satisfy one rule? Unknown ops keep the row."""
+    text = "" if value is None else str(value).strip()
+
+    if op == "non_empty":
+        return text.lower() not in JUNK_VALUES
+    if op == "not_one_of":
+        opts = target if isinstance(target, list) else str(target or "").split(",")
+        return text.lower() not in {str(o).strip().lower() for o in opts}
+    if op in ("gte", "lte"):
+        n, t = _as_float(value), _as_float(target)
+        if n is None or t is None:
+            return False          # can't compare -> not a row you want
+        return n >= t if op == "gte" else n <= t
+    if op == "equals":
+        return text.lower() == str(target).strip().lower()
+    if op == "not_equals":
+        return text.lower() != str(target).strip().lower()
+    if op == "contains":
+        return str(target).strip().lower() in text.lower()
+    if op == "not_contains":
+        return str(target).strip().lower() not in text.lower()
+    if op in ("is_true", "is_false"):
+        b = _as_bool(value)
+        if b is None:
+            return False
+        return b if op == "is_true" else not b
+    return True
+
+
+def apply_filters(rows: list[dict[str, Any]],
+                  rules: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Keep rows satisfying every rule. Returns (kept, stats).
+
+    Stats report per-rule drop counts so the UI can say which rule is doing the
+    work — a filter that silently removes everything is worse than none.
+    """
+    if not rules:
+        return rows, {"before": len(rows), "after": len(rows), "dropped": 0, "by_rule": []}
+
+    per_rule = [0] * len(rules)
+    kept: list[dict[str, Any]] = []
+    for row in rows:
+        ok = True
+        for i, rule in enumerate(rules):
+            col, op = rule.get("column"), rule.get("op")
+            if not col or not op:
+                continue
+            if not _passes(get_path(row, col), op, rule.get("value")):
+                per_rule[i] += 1
+                ok = False
+                break          # first failing rule owns the drop
+        if ok:
+            kept.append(row)
+
+    return kept, {
+        "before": len(rows), "after": len(kept), "dropped": len(rows) - len(kept),
+        "by_rule": [{"column": r.get("column"), "op": r.get("op"),
+                     "value": r.get("value"), "dropped": per_rule[i]}
+                    for i, r in enumerate(rules)],
+    }
+
+
+def suggest_filters(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Propose filters from what's actually in the sample.
+
+    Only suggests a rule when the sample shows evidence it's needed, so the
+    defaults aren't noise on a clean dataset.
+    """
+    if not rows:
+        return []
+    out: list[dict[str, Any]] = []
+    columns = detect_columns(rows)
+
+    for col in columns:
+        values = [get_path(r, col) for r in rows]
+        texts = [("" if v is None else str(v).strip()) for v in values]
+        non_null = [t for t in texts if t]
+
+        # Placeholder junk sitting where real content should be.
+        junk = sum(1 for t in texts if t.lower() in JUNK_VALUES)
+        if junk and junk < len(texts):
+            out.append({"column": col, "op": "non_empty", "value": "",
+                        "why": f"{junk} of {len(texts)} sampled rows are empty or a placeholder "
+                               f"like [removed] — those would train as if they were real answers."})
+            continue
+
+        if not non_null:
+            continue
+
+        # Boolean flags worth excluding by default (NSFW and friends).
+        bools = [_as_bool(t) for t in non_null]
+        if all(b is not None for b in bools) and any(bools):
+            if any(k in col.lower() for k in ("nsfw", "over_18", "adult", "explicit", "spam", "deleted")):
+                out.append({"column": col, "op": "is_false", "value": "",
+                            "why": f"{sum(1 for b in bools if b)} sampled rows are flagged {col}."})
+            continue
+
+        # A quality signal you can threshold on.
+        nums = [_as_float(t) for t in non_null]
+        if all(n is not None for n in nums) and len(nums) >= 5:
+            if any(k in col.lower() for k in ("score", "upvote", "rating", "votes", "likes", "quality")):
+                ranked = sorted(n for n in nums if n is not None)
+                median = ranked[len(ranked) // 2]
+                out.append({"column": col, "op": "gte", "value": max(1, int(median)),
+                            "why": f"'{col}' looks like a quality signal (median {median:g} in the "
+                                   f"sample). Raising it trades volume for better examples."})
+    return out
