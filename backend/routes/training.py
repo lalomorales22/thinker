@@ -183,7 +183,10 @@ async def _run_job(job_id: str, config: TrainingConfig, model_name: str, api_key
         raise
     except Exception as e:
         reason = _friendly_training_error(e)
-        logger.error(f"Job {job_id} failed: {reason}")
+        # Full traceback: the SDK's own message is often just "Connection error.",
+        # which hides whether the failure was the remote API, auth, or the local
+        # sidecar subprocess the client spawns.
+        logger.error(f"Job {job_id} failed: {reason}", exc_info=True)
         db.update_job(job_id, status="failed", completed_at=_now(), error=reason, status_message="Failed")
         hub.publish({"type": "job_status", "data": {"job_id": job_id, "status": "failed", "error": reason}})
     finally:

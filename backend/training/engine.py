@@ -190,13 +190,21 @@ async def run_supervised(config, examples, report: ReportFn, should_cancel: Canc
     batch_size = max(1, int(config.get("batch_size", 4)))
     max_length = int(config.get("max_length", 1024))
 
-    report(0, {"mode": "real"}, f"Connecting to Tinker and loading {base_model}…")
     # ServiceClient() and get_tokenizer() are synchronous and do network I/O
     # (auth handshake, tokenizer download). Called directly they block the whole
     # event loop — every other request in the app hangs until they return, and a
     # failure here takes the server down with it rather than just failing the job.
+    #
+    # Each step reports separately: one "Connecting…" message covering three very
+    # different operations meant a multi-minute hang gave no clue which was stuck.
+    report(0, {"mode": "real"}, "Authenticating with Tinker…")
     service = await asyncio.to_thread(tinker.ServiceClient)
+
+    report(0, {"mode": "real"},
+           f"Asking Tinker for a {base_model} worker — this can take a few minutes…")
     training_client = await service.create_lora_training_client_async(base_model=base_model, rank=rank)
+
+    report(0, {"mode": "real"}, "Loading the tokenizer…")
     tokenizer = await asyncio.to_thread(training_client.get_tokenizer)
     renderer_name = _recommended_renderer_name(base_model, R, config.get("renderer_name"))
     renderer = R.get_renderer(renderer_name, tokenizer)
@@ -276,13 +284,21 @@ async def run_dpo(config, examples, report: ReportFn, should_cancel: CancelFn) -
     max_length = int(config.get("max_length", 1024))
     beta = float(config.get("dpo_beta", 0.1))
 
-    report(0, {"mode": "real"}, f"Connecting to Tinker and loading {base_model}…")
     # ServiceClient() and get_tokenizer() are synchronous and do network I/O
     # (auth handshake, tokenizer download). Called directly they block the whole
     # event loop — every other request in the app hangs until they return, and a
     # failure here takes the server down with it rather than just failing the job.
+    #
+    # Each step reports separately: one "Connecting…" message covering three very
+    # different operations meant a multi-minute hang gave no clue which was stuck.
+    report(0, {"mode": "real"}, "Authenticating with Tinker…")
     service = await asyncio.to_thread(tinker.ServiceClient)
+
+    report(0, {"mode": "real"},
+           f"Asking Tinker for a {base_model} worker — this can take a few minutes…")
     training_client = await service.create_lora_training_client_async(base_model=base_model, rank=rank)
+
+    report(0, {"mode": "real"}, "Loading the tokenizer…")
     tokenizer = await asyncio.to_thread(training_client.get_tokenizer)
     renderer_name = _recommended_renderer_name(base_model, R, config.get("renderer_name"))
     renderer = R.get_renderer(renderer_name, tokenizer)
@@ -391,13 +407,21 @@ async def run_rl(config, examples, report: ReportFn, should_cancel: CancelFn) ->
     max_tokens = int(config.get("rl_max_tokens", 256))
     temperature = float(config.get("rl_temperature", 1.0))
 
-    report(0, {"mode": "real"}, f"Connecting to Tinker and loading {base_model}…")
     # ServiceClient() and get_tokenizer() are synchronous and do network I/O
     # (auth handshake, tokenizer download). Called directly they block the whole
     # event loop — every other request in the app hangs until they return, and a
     # failure here takes the server down with it rather than just failing the job.
+    #
+    # Each step reports separately: one "Connecting…" message covering three very
+    # different operations meant a multi-minute hang gave no clue which was stuck.
+    report(0, {"mode": "real"}, "Authenticating with Tinker…")
     service = await asyncio.to_thread(tinker.ServiceClient)
+
+    report(0, {"mode": "real"},
+           f"Asking Tinker for a {base_model} worker — this can take a few minutes…")
     training_client = await service.create_lora_training_client_async(base_model=base_model, rank=rank)
+
+    report(0, {"mode": "real"}, "Loading the tokenizer…")
     tokenizer = await asyncio.to_thread(training_client.get_tokenizer)
     renderer_name = _recommended_renderer_name(base_model, R, config.get("renderer_name"))
     renderer = R.get_renderer(renderer_name, tokenizer)

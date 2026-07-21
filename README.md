@@ -250,6 +250,23 @@ like `instruction`/`response`). Use the mapping step to point each required
 field at the right column — the preview updates live, so you can see the real
 training examples before importing.
 
+**A run sits at 0% for minutes**
+
+Watch the phase text under the progress bar — it names the exact step:
+`Authenticating with Tinker…`, `Asking Tinker for a <model> worker…` (worker
+allocation, legitimately slow — minutes is normal), or `Loading the tokenizer…`.
+Whichever it sits on is the one that's stuck. 0% CPU on the backend means it's
+waiting on the network, not computing.
+
+**Hot reload doesn't pick up backend edits**
+
+`--reload` does not fire on every machine (watchfiles can fail to see changes
+depending on the filesystem). The failure is silent and nasty: the server keeps
+serving the old code, so fixes appear to do nothing. If an edit seems to have no
+effect, restart the backend rather than trusting reload. To check, edit a `.py`
+file and look for `WatchFiles detected changes … Reloading` in the output — if
+it never appears, reload is not working for you.
+
 **A training run needs a real key**
 
 Demo mode needs nothing. Real runs need a Tinker key in **Settings** — but note
