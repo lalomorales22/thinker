@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Database, UploadCloud, PencilLine, DownloadCloud, Plus, Trash2, Eye,
-  Rocket, Search, ArrowLeft, Heart, Download, X, FileJson, AlertCircle,
+  Rocket, Search, ArrowLeft, Heart, Download, X, FileJson, AlertCircle, Boxes,
 } from 'lucide-react'
 import { api, Dataset, FilterRule } from '../lib/api'
 import { useAsync } from '../lib/hooks'
@@ -977,6 +977,133 @@ function HFBrowse({ onSelect }: { onSelect: (name: string, subset?: string) => v
   )
 }
 
+// --- mix datasets -----------------------------------------------------------
+
+interface MixSourceInfo {
+  dataset_id: string; name: string
+  requested_pct: number; actual_pct: number
+  available: number; taking: number; exhausted: boolean
+}
+
+/**
+ * Blend several datasets in fixed proportions.
+ *
+ * Ratio is what you're actually choosing here. Empathetic dialogue teaches short
+ * curious replies and instruction data teaches long thorough ones; get the mix
+ * wrong and the verbose half wins. So the preview leads with the composition you
+ * would really get — which is not always the one you asked for, since the
+ * smallest source caps the whole blend.
+ */
+function MixModal({ datasets, onClose }: { datasets: Dataset[]; onClose: () => void }) {
+  const bump = useStore(s => s.bump)
+  const [weights, setWeights] = useState<Record<string, number>>({})
+  const [name, setName] = useState('Mixed dataset')
+  const [prev, setPrev] = useState<{ sources: MixSourceInfo[]; total: number; limiting: string } | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const chosen = Object.entries(weights)
+    .filter(([, w]) => w > 0)
+    .map(([dataset_id, weight]) => ({ dataset_id, weight }))
+
+  useEffect(() => {
+    if (chosen.length === 0) { setPrev(null); setErr(null); return }
+    let alive = true
+    const t = setTimeout(() => {
+      api.datasets.mixPreview({ sources: chosen })
+        .then(r => { if (alive) { setPrev(r); setErr(null) } })
+        .catch(e => { if (alive) { setPrev(null); setErr(e.message) } })
+    }, 250)
+    return () => { alive = false; clearTimeout(t) }
+  }, [JSON.stringify(chosen)])
+
+  async function create() {
+    setBusy(true)
+    try {
+      const r = await api.datasets.mix({ sources: chosen, name: name.trim() || 'Mixed dataset' })
+      bump()
+      toast(`Mixed ${fmtInt(r.dataset.num_samples)} examples from ${chosen.length} datasets.`, 'ok')
+      onClose()
+    } catch (e: any) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
+
+  return (
+    <Modal open onClose={onClose} wide title="Mix datasets"
+      subtitle="Blend several sets in fixed proportions — the ratio is what shapes the model."
+      footer={<>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button icon={<Plus className="w-4 h-4" />} loading={busy}
+          disabled={!prev?.total} onClick={create}>Create mixed dataset</Button>
+      </>}>
+      <div className="space-y-5">
+        <Field label="How much of each?" hint="Any numbers work — 60/30/10 and 6/3/1 mean the same thing. Zero leaves it out.">
+          <div className="space-y-2">
+            {datasets.map(d => (
+              <div key={d.id} className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-ink truncate">{d.name}</div>
+                  <div className="text-[11px] text-ink-mute">
+                    {fmtInt(d.num_samples)} examples · {ttLabel(d.training_type)}
+                  </div>
+                </div>
+                <Input type="number" min={0} className="w-24"
+                  value={String(weights[d.id] ?? 0)}
+                  onChange={e => setWeights(w => ({ ...w, [d.id]: Number(e.target.value) || 0 }))} />
+              </div>
+            ))}
+          </div>
+        </Field>
+
+        {err && <p className="text-sm text-berry-ink">{err}</p>}
+
+        {prev && prev.total > 0 && (
+          <div className="rounded-xl2 border border-line bg-raised p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-display font-bold text-sm text-ink">
+                {fmtInt(prev.total)} examples
+              </span>
+              <span className="text-[11px] text-ink-mute">capped by “{prev.limiting}”</span>
+            </div>
+
+            {/* Proportions, at a glance. */}
+            <div className="flex h-2.5 rounded-full overflow-hidden bg-line">
+              {prev.sources.map((s, i) => (
+                <div key={s.dataset_id} title={`${s.name} — ${s.actual_pct}%`}
+                  style={{ width: `${s.actual_pct}%` }}
+                  className={['bg-orange', 'bg-charcoal', 'bg-amber', 'bg-berry', 'bg-ink-mute'][i % 5]} />
+              ))}
+            </div>
+
+            <div className="space-y-1">
+              {prev.sources.map((s, i) => (
+                <div key={s.dataset_id} className="flex items-center gap-2 text-[11px]">
+                  <span className={cn('w-2 h-2 rounded-full shrink-0',
+                    ['bg-orange', 'bg-charcoal', 'bg-amber', 'bg-berry', 'bg-ink-mute'][i % 5])} />
+                  <span className="text-ink flex-1 truncate">{s.name}</span>
+                  <span className="font-mono text-ink-soft">{s.actual_pct}%</span>
+                  <span className="font-mono text-ink-mute w-24 text-right">
+                    {fmtInt(s.taking)} of {fmtInt(s.available)}
+                  </span>
+                  {s.exhausted && <Badge tone="amber">all of it</Badge>}
+                </div>
+              ))}
+            </div>
+
+            <p className="text-[11px] text-ink-mute">
+              Rows are shuffled together, so training doesn’t see one source at a time.
+              To get more total examples, either add rows to “{prev.limiting}” or give it a smaller share.
+            </p>
+          </div>
+        )}
+
+        <Field label="Name it">
+          <Input value={name} onChange={e => setName(e.target.value)} />
+        </Field>
+      </div>
+    </Modal>
+  )
+}
+
 // --- hugging face modal (wrapper) -------------------------------------------
 function HFModal({ onClose }: { onClose: () => void }) {
   const [selected, setSelected] = useState<{ name: string; subset?: string } | null>(null)
@@ -1001,7 +1128,7 @@ export default function Data() {
   const { data, loading, error } = useAsync<{ datasets: Dataset[] }>(() => api.datasets.list(), [dataVersion])
   const { data: templates } = useAsync<Templates>(() => api.datasets.templates(), [])
 
-  const [modal, setModal] = useState<null | 'upload' | 'create' | 'hf'>(null)
+  const [modal, setModal] = useState<null | 'upload' | 'create' | 'hf' | 'mix'>(null)
   const [preview, setPreview] = useState<{ id: string; name: string } | null>(null)
 
   const datasets = data?.datasets ?? []
@@ -1034,6 +1161,9 @@ export default function Data() {
         <Button size="lg" icon={<UploadCloud className="w-4 h-4" />} onClick={() => setModal('upload')}>Upload a file</Button>
         <Button size="lg" variant="dark" icon={<PencilLine className="w-4 h-4" />} onClick={() => setModal('create')}>Create by hand</Button>
         <Button size="lg" variant="outline" icon={<DownloadCloud className="w-4 h-4" />} onClick={() => setModal('hf')}>Import from Hugging Face</Button>
+        {datasets.length >= 2 && (
+          <Button size="lg" variant="outline" icon={<Boxes className="w-4 h-4" />} onClick={() => setModal('mix')}>Mix datasets</Button>
+        )}
       </div>
 
       {/* List */}
@@ -1076,6 +1206,7 @@ export default function Data() {
       {modal === 'upload' && <UploadModal templates={templates} onClose={() => setModal(null)} />}
       {modal === 'create' && <CreateModal templates={templates} onClose={() => setModal(null)} />}
       {modal === 'hf' && <HFModal onClose={() => setModal(null)} />}
+      {modal === 'mix' && <MixModal datasets={datasets} onClose={() => setModal(null)} />}
       {preview && <PreviewModal id={preview.id} name={preview.name} onClose={() => setPreview(null)} />}
     </div>
   )

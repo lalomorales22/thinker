@@ -255,6 +255,14 @@ export const api = {
       train_split?: number; val_split?: number; test_split?: number
       secrets_action?: 'keep' | 'scrub' | 'drop_rows'
     }) => request<any>('/api/datasets/commit', { body }),
+    /** What a blend of several datasets would look like — writes nothing. */
+    mixPreview: (body: { sources: { dataset_id: string; weight: number }[]; target_rows?: number }) =>
+      request<any>('/api/datasets/mix/preview', { body }),
+    /** Write the blend out as one new dataset. */
+    mix: (body: {
+      sources: { dataset_id: string; weight: number }[]
+      name: string; target_rows?: number; shuffle?: boolean; seed?: number
+    }) => request<any>('/api/datasets/mix', { body }),
     discard: (id: string) =>
       request<any>(`/api/datasets/discard/${encodeURIComponent(id)}`, { method: 'POST' }),
     create: (body: { name: string; training_type: string; rows: any[] }) =>

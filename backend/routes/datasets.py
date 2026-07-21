@@ -365,6 +365,163 @@ async def preview_mapping(req: PreviewMappingRequest):
             "notes": check["notes"], "ok": check["ok"], "filter_stats": filter_stats}
 
 
+# --- blending several datasets into one ---------------------------------------
+
+class MixSource(BaseModel):
+    dataset_id: str
+    # Relative proportion. Normalised across sources, so 60/20/10/5/5 and
+    # 6/2/1/0.5/0.5 mean the same thing.
+    weight: float = 1.0
+
+
+class MixRequest(BaseModel):
+    sources: list[MixSource]
+    name: str = "Mixed dataset"
+    # 0 means "as many rows as these ratios allow".
+    target_rows: int = 0
+    shuffle: bool = True
+    seed: int = 42
+
+
+def _plan_mix(req: MixRequest) -> dict[str, Any]:
+    """Work out how many rows to take from each source.
+
+    Ratios are a promise about composition, so the achievable total is capped by
+    whichever source runs out first — asking for 60% of something with 100 rows
+    limits the whole blend. The alternative (quietly under-filling one source)
+    would hand back a mix that isn't the mix you asked for.
+    """
+    if not req.sources:
+        raise HTTPException(400, "Pick at least one dataset to mix.")
+
+    entries = []
+    for s in req.sources:
+        ds = db.get_dataset(s.dataset_id)
+        if not ds:
+            raise HTTPException(404, f"Dataset {s.dataset_id} no longer exists.")
+        if s.weight <= 0:
+            continue
+        entries.append({"dataset": ds, "weight": float(s.weight)})
+    if not entries:
+        raise HTTPException(400, "Give at least one dataset a weight above zero.")
+
+    types = {e["dataset"]["training_type"] for e in entries}
+    if len(types) > 1:
+        raise HTTPException(
+            400,
+            "These datasets train different ways (" + ", ".join(sorted(types)) +
+            "). A supervised set and a preference set can't be blended — the "
+            "trainer reads them differently.",
+        )
+
+    total_weight = sum(e["weight"] for e in entries)
+    for e in entries:
+        e["fraction"] = e["weight"] / total_weight
+        e["available"] = int(e["dataset"].get("num_samples") or 0)
+        # How large the whole blend could be if this source were the constraint.
+        e["ceiling"] = e["available"] / e["fraction"] if e["fraction"] > 0 else 0
+
+    limiter = min(entries, key=lambda e: e["ceiling"])
+    achievable = int(limiter["ceiling"])
+    total = min(achievable, req.target_rows) if req.target_rows > 0 else achievable
+
+    for e in entries:
+        e["taking"] = min(e["available"], int(round(e["fraction"] * total)))
+
+    return {
+        "entries": entries,
+        "total": sum(e["taking"] for e in entries),
+        "achievable": achievable,
+        "limiting": limiter["dataset"]["name"],
+        "training_type": types.pop(),
+    }
+
+
+def _mix_summary(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    total = plan["total"] or 1
+    return [{
+        "dataset_id": e["dataset"]["id"],
+        "name": e["dataset"]["name"],
+        "requested_pct": round(e["fraction"] * 100, 1),
+        "actual_pct": round(e["taking"] / total * 100, 1),
+        "available": e["available"],
+        "taking": e["taking"],
+        "exhausted": e["taking"] >= e["available"],
+    } for e in plan["entries"]]
+
+
+@router.post("/mix/preview")
+async def mix_preview(req: MixRequest):
+    """Show the blend you'd get, without writing anything."""
+    plan = _plan_mix(req)
+    samples = []
+    for e in plan["entries"][:4]:
+        ds = e["dataset"]
+        try:
+            rows = datautil.load_rows(ds["path"], ds.get("format") or "jsonl", limit=1)
+        except Exception:
+            rows = []
+        if rows:
+            samples.append({"from": ds["name"], "row": rows[0]})
+    return {
+        "sources": _mix_summary(plan),
+        "total": plan["total"],
+        "achievable": plan["achievable"],
+        "limiting": plan["limiting"],
+        "training_type": plan["training_type"],
+        "samples": samples,
+    }
+
+
+@router.post("/mix")
+async def mix_datasets(req: MixRequest):
+    """Write the blend out as a single new dataset."""
+    import random
+
+    plan = _plan_mix(req)
+    rng = random.Random(req.seed)
+    out: list[dict[str, Any]] = []
+
+    for e in plan["entries"]:
+        ds = e["dataset"]
+        rows = datautil.load_rows(ds["path"], ds.get("format") or "jsonl")
+        take = min(e["taking"], len(rows))
+        picked = rng.sample(rows, take) if take < len(rows) else list(rows)
+        for r in picked:
+            # Keep provenance so a blend can be traced back to its parts.
+            out.append({**r, "_source": ds["name"]})
+
+    if not out:
+        raise HTTPException(400, "That mix produces no rows.")
+
+    # Interleave. Left blocked, the model would see every empathetic example
+    # before its first joke, and the tail of training would dominate the result.
+    if req.shuffle:
+        rng.shuffle(out)
+
+    tt = plan["training_type"]
+    check = datautil.validate(out, tt if tt in ("sl", "dpo", "rl") else "sl")
+    dataset_id = str(uuid.uuid4())
+    path = str(DATASETS_DIR / f"{dataset_id}_mixed.jsonl")
+    with open(path, "w", encoding="utf-8") as f:
+        for r in out:
+            f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
+
+    num = len(out)
+    rec = {
+        "id": dataset_id, "name": req.name.strip() or "Mixed dataset", "source": "mixed",
+        "training_type": tt, "format": "jsonl", "path": path, "num_samples": num,
+        "size_bytes": os.path.getsize(path), "columns": check["columns"],
+        "split": {"train": int(num * 0.9), "validation": num - int(num * 0.9), "test": 0},
+        "schema_ok": check["ok"], "schema_notes": check["notes"],
+        "meta": {"mix": _mix_summary(plan), "seed": req.seed, "shuffled": req.shuffle},
+        "created_at": _now(),
+    }
+    dataset = db.add_dataset(rec)
+    logger.info(f"Mixed {len(plan['entries'])} datasets -> '{rec['name']}' ({num} rows)")
+    return {"dataset": dataset, "sources": _mix_summary(plan)}
+
+
 class CreateRequest(BaseModel):
     name: str
     training_type: str = "sl"

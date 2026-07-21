@@ -33,6 +33,19 @@ built-in **Demo mode** lets you try the whole flow with no API key and no cost.
   you commit: **trains as-is**, **partly usable**, or **needs field mapping**,
   with the detected columns shown. It catches real traps — e.g. `Anthropic/hh-rlhf`
   bakes the prompt into the chosen/rejected text, so it can't feed DPO unmapped.
+- **Drop the rows you don't want** — importers can filter as well as map. Schema
+  validation can't tell a real answer from the literal string `[removed]`, so
+  filters handle content: non-empty (which knows the placeholder vocabulary),
+  numeric thresholds, equality, contains, and booleans for flags like
+  `subreddit.nsfw`. Suggestions come from Thinker having actually read your
+  sample, so they only appear when the data warrants them and each says why —
+  *"54 of 100 sampled rows are empty or a placeholder"*.
+- **Mix several datasets into one** — pick proportions (60/30/10) and Thinker
+  blends and shuffles them into a single trainable set. Ratio is the real
+  choice: empathetic dialogue teaches short curious replies, instruction data
+  teaches long thorough ones, and the wrong mix lets one drown the other. The
+  preview shows the composition you'd actually get, which isn't always the one
+  you asked for — the smallest source caps the whole blend, and it names which.
 - **Train for real** — three genuinely-implemented methods:
   - **Supervised** — teach by example (prompt → answer).
   - **Preference (DPO)** — teach what's *better* (chosen vs. rejected), via a real
@@ -188,6 +201,20 @@ a blocker — it will still run, but it will swap and take considerably longer.
 
 Expected on a first run; the export installs it. MLX is Apple Silicon only, so
 the Export page won't work on an Intel Mac.
+
+**Everything says the backend is unreachable, but it's clearly running**
+
+Most likely a port collision on 8000. `localhost` resolves to either `::1`
+(IPv6) or `127.0.0.1` (IPv4), and uvicorn binds IPv4 only — so if any other
+local project is listening on `[::1]:8000`, requests land there instead.
+Thinker now defaults to the explicit `http://127.0.0.1:8000` for this reason.
+Check with:
+
+```bash
+lsof -nP -iTCP:8000 -sTCP:LISTEN
+```
+
+If something else is squatting the port, stop it or change one of the two.
 
 **My upload says "needs field mapping"**
 
