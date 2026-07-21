@@ -14,6 +14,12 @@ built-in **Demo mode** lets you try the whole flow with no API key and no cost.
 - **Add data three ways** — upload a file (`.jsonl` / `.json` / `.csv`), type
   examples by hand, or import a dataset straight from **Hugging Face**. Thinker
   validates it against the training type and tells you exactly what to fix.
+- **Find a dataset without guessing** — the Hugging Face importer opens on a
+  goal-first shortlist ("make it follow instructions", "match my tone"), and
+  every suggestion *and* search result is checked live against the Hub before
+  you commit: **trains as-is**, **partly usable**, or **needs field mapping**,
+  with the detected columns shown. It catches real traps — e.g. `Anthropic/hh-rlhf`
+  bakes the prompt into the chosen/rejected text, so it can't feed DPO unmapped.
 - **Train for real** — three genuinely-implemented methods:
   - **Supervised** — teach by example (prompt → answer).
   - **Preference (DPO)** — teach what's *better* (chosen vs. rejected), via a real
@@ -52,6 +58,11 @@ tooltips on every training term, and Recharts for real loss/reward curves.
 This creates the backend virtualenv, installs dependencies, and launches both
 servers. Then open **http://localhost:5173**.
 
+The script re-checks the Python dependencies on every run (not just when it
+first creates `.venv`), so an interrupted install can't leave you with a venv
+that exists but can't start. First run pulls PyTorch and the Tinker SDK, so
+expect a few minutes.
+
 <details>
 <summary>Manual setup</summary>
 
@@ -59,7 +70,14 @@ servers. Then open **http://localhost:5173**.
 # Backend — use Python 3.11–3.13 (the Tinker SDK isn't ready for 3.14+ yet)
 cd backend
 python3.12 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
-./.venv/bin/python -m uvicorn main:app --reload --port 8000
+
+# Exclude storage/ and logs/ from the reloader: the app writes its SQLite DB,
+# datasets, and logs into this directory, and a plain --reload would restart
+# the server every time a training step records a metric.
+./.venv/bin/python -m uvicorn main:app --port 8000 \
+  --reload --reload-dir . \
+  --reload-exclude 'storage/*' --reload-exclude 'logs/*' \
+  --reload-exclude '*.db' --reload-exclude '*.log'
 
 # Frontend (in another terminal)
 cd frontend
@@ -77,6 +95,57 @@ npm install && npm run dev
   (installed from `requirements.txt`).
 - **Optional:** [Ollama](https://ollama.ai) running locally makes the in-app
   training assistant conversational (otherwise it uses a simple built-in helper).
+
+## Troubleshooting
+
+**"Can't reach the Thinker backend at http://localhost:8000"**
+
+The backend isn't running (or isn't up yet). The message is literal, not a UI
+glitch — if you see it on several pages at once, check the backend, not the app.
+
+Thinker recovers on its own: failed requests retry with a backoff, and when the
+live WebSocket reconnects, any view still showing an error refetches. You should
+not have to reload the page. Confirm the backend directly with:
+
+```bash
+curl http://localhost:8000/api/health
+```
+
+**Backend exits with `No module named uvicorn`**
+
+`backend/.venv` exists but is empty. Older versions of `START_UI.sh` only
+installed dependencies when *creating* the venv, so an interrupted first run
+left it unusable. The current script detects this; to fix it by hand:
+
+```bash
+cd backend && ./.venv/bin/python -m pip install -r requirements.txt
+```
+
+**Port 8000 or 5173 already in use**
+
+An earlier run is still alive: `pkill -f 'uvicorn main:app'` and `pkill -f vite`.
+
+**The Models page looks empty**
+
+"Your models" only lists models *you've* trained, so it's empty until your first
+run finishes. The 24 base models are under **Model catalog** — the page opens
+there automatically until you have models of your own.
+
+**Hugging Face search returns an error**
+
+Search needs `huggingface-hub`, and the API changed in 1.x. If you're on a
+pinned older version, reinstall from `requirements.txt`.
+
+**A training run needs a real key**
+
+Demo mode needs nothing. Real runs need a Tinker key in **Settings** — but note
+it's stored in your browser and sent per request, so it applies to *that browser
+only*. Anything not driven from your browser session (a `curl` check, a
+background job) will see no key and get a 401.
+
+To make the key available server-side, copy `.env.example` to `.env` in the repo
+root and set `TINKER_API_KEY` there. `/api/health` reports `tinker_api_key` for
+whichever source applies to that request.
 
 ## Docs
 
