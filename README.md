@@ -46,6 +46,18 @@ built-in **Demo mode** lets you try the whole flow with no API key and no cost.
   teaches long thorough ones, and the wrong mix lets one drown the other. The
   preview shows the composition you'd actually get, which isn't always the one
   you asked for — the smallest source caps the whole blend, and it names which.
+- **Write a character's voice** — the **Voice** page. No dataset on the Hub is
+  *your* character, so this is the part that can't be automated: hand-write a
+  set of exchanges that sound unmistakably like them, then have a local Ollama
+  model fan them out into enough examples to train on. Generation is free and
+  stays on your machine. Candidates are held for review rather than saved,
+  because a teacher drifts toward its own voice and unreviewed drift is exactly
+  how a character becomes a generic assistant with a name.
+
+  Two things learned the hard way on an M1: use a small **instruct** model
+  (llama3.2 works; reasoning models spend their whole output on thinking tokens
+  and return nothing), and generate in small batches — a laptop manages a few
+  tokens a second.
 - **Train for real** — three genuinely-implemented methods:
   - **Supervised** — teach by example (prompt → answer).
   - **Preference (DPO)** — teach what's *better* (chosen vs. rejected), via a real
@@ -92,8 +104,11 @@ non-training features work without the SDK installed.
 Shared data logic lives in `training/datautil.py` — schema validation, field
 mapping, and the "will this actually train?" fit check are written once and used
 by every importer, so the local-file and HuggingFace paths can't drift apart.
-`training/secrets.py` is the credential scanner, and `routes/export.py` handles
-the MLX export and its preflight.
+`training/secrets.py` is the credential scanner, `routes/export.py` handles the
+MLX export and its preflight, and `routes/seeds.py` holds the voice authoring +
+expansion. Seeds live in `storage/voice_seeds.json` rather than the database —
+there are only ever a few hundred, they're hand-authored, and plain text means
+they can be edited, diffed, and backed up outside the app.
 
 **Frontend** (`/frontend`) — React 18 + TypeScript + Vite + Tailwind. A friendly
 "studio" design system (black / orange / white), a plain-language glossary with

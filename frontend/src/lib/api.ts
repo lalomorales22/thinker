@@ -305,6 +305,23 @@ export const api = {
       request<Record<string, any>>('/api/assistant/suggest-config', { body }),
   },
 
+  /** Hand-authored character voice, expanded with a local teacher model. */
+  seeds: {
+    all: () => request<any>('/api/seeds'),
+    setPersona: (body: { name: string; description: string }) =>
+      request<any>('/api/seeds/persona', { method: 'PUT', body }),
+    upsert: (body: { id?: string; turns: { role: string; content: string }[]; note?: string }) =>
+      request<any>('/api/seeds/seed', { body }),
+    remove: (id: string) =>
+      request<any>(`/api/seeds/seed/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    expand: (body: { count: number; model?: string; topic_hint?: string; temperature?: number }) =>
+      request<any>('/api/seeds/expand', { body }),
+    accept: (body: { candidates: { turns: { role: string; content: string }[] }[] }) =>
+      request<any>('/api/seeds/accept', { body }),
+    toDataset: (body: { name?: string; include_expanded?: boolean }) =>
+      request<any>('/api/seeds/to-dataset', { body }),
+  },
+
   /** Export a fine-tune to MLX for on-device (iPhone) use. */
   export: {
     /** Will it fit on a phone, and can this machine do the conversion? */

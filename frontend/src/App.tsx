@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Home, Sparkles, Database, Boxes, MessageSquare, BarChart3, Swords, Smartphone, Settings as SettingsIcon, HelpCircle, Wifi, WifiOff } from 'lucide-react'
+import { Home, Sparkles, Database, Boxes, MessageSquare, BarChart3, Swords, Smartphone, Feather, Settings as SettingsIcon, HelpCircle, Wifi, WifiOff } from 'lucide-react'
 import { useStore, ViewType } from './store/useStore'
 import { useLiveConnection } from './lib/hooks'
 import { cn } from './lib/util'
@@ -17,6 +17,7 @@ import Models from './views/Models'
 import Playground from './views/Playground'
 import Analytics from './views/Analytics'
 import Arena from './views/Arena'
+import Voice from './views/Voice'
 import ExportView from './views/Export'
 
 const NAV: { id: ViewType; label: string; icon: any; hint: string }[] = [
@@ -27,12 +28,13 @@ const NAV: { id: ViewType; label: string; icon: any; hint: string }[] = [
   { id: 'playground', label: 'Playground', icon: MessageSquare, hint: 'Chat & compare' },
   { id: 'analytics', label: 'Analytics', icon: BarChart3, hint: 'Runs & metrics' },
   { id: 'arena', label: 'Arena', icon: Swords, hint: 'Multi-agent RL' },
+  { id: 'voice', label: 'Voice', icon: Feather, hint: 'Write a character' },
   { id: 'export', label: 'Export', icon: Smartphone, hint: 'Run it on a phone' },
 ]
 
 const VIEWS: Record<ViewType, () => JSX.Element> = {
   home: HomeView, train: Train, data: Data, models: Models,
-  playground: Playground, analytics: Analytics, arena: Arena, export: ExportView,
+  playground: Playground, analytics: Analytics, arena: Arena, voice: Voice, export: ExportView,
 }
 
 export default function App() {

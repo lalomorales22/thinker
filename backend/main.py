@@ -30,7 +30,7 @@ import db
 import catalog
 from config import get_tinker_api_key, mask_key
 from events import hub
-from routes import training, models, chat, datasets, analytics, assistant, huggingface, export
+from routes import training, models, chat, datasets, analytics, assistant, huggingface, export, seeds
 from utils import (
     logger,
     ThinkerException,
@@ -84,6 +84,7 @@ app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"]
 app.include_router(assistant.router, prefix="/api/assistant", tags=["assistant"])
 app.include_router(huggingface.router, prefix="/api/huggingface", tags=["huggingface"])
 app.include_router(export.router, prefix="/api/export", tags=["export"])
+app.include_router(seeds.router, prefix="/api/seeds", tags=["seeds"])
 
 
 @app.get("/")
