@@ -274,6 +274,12 @@ export default function Train() {
                       <span className="ml-auto"><InfoTip term={t} /></span>
                     </div>
                     <p className="text-xs text-ink-soft mt-1.5">{tt.short}</p>
+                    <p className="text-[11px] text-ink-mute mt-2 pt-2 border-t border-line-soft">
+                      <span className="font-semibold text-ink-soft">Needs:</span> {tt.needs}
+                    </p>
+                    {active && (
+                      <p className="text-[11px] text-ink-mute mt-1.5 italic">{tt.example}</p>
+                    )}
                   </div>
                 )
               })}

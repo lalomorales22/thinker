@@ -4,7 +4,7 @@ import {
 } from 'lucide-react'
 import { api, CatalogModel, TrainedModel } from '../lib/api'
 import { InfoTip } from '../lib/glossary'
-import { useAsync } from '../lib/hooks'
+import { useAsync, AsyncResult } from '../lib/hooks'
 import { useStore } from '../store/useStore'
 import {
   Button, Card, Badge, Dot, EmptyState, Skeleton, Modal, Segmented, toast,
@@ -40,8 +40,16 @@ function metricNum(fm: any, keys: string[]): number | null {
 }
 
 export default function Models() {
-  const [tab, setTab] = useState<Tab>('yours')
+  const [tab, setTab] = useState<Tab | null>(null)
   const setView = useStore((s) => s.setView)
+  const dataVersion = useStore((s) => s.dataVersion)
+  const saved = useAsync(() => api.models.saved(), [dataVersion])
+
+  // Before you've trained anything, "Your models" is an empty state with no
+  // hint that 24 base models live one tab over — so open on the catalog until
+  // there's something of your own to show. An explicit click always wins.
+  const noneTrained = !!saved.data && (saved.data.models?.length ?? 0) === 0
+  const activeTab: Tab = tab ?? (noneTrained ? 'catalog' : 'yours')
 
   return (
     <div>
@@ -53,7 +61,7 @@ export default function Models() {
           </p>
         </div>
         <Segmented<Tab>
-          value={tab}
+          value={activeTab}
           onChange={setTab}
           options={[
             { value: 'yours', label: 'Your models' },
@@ -62,17 +70,19 @@ export default function Models() {
         />
       </div>
 
-      {tab === 'yours' ? <YourModels setView={setView} /> : <Catalog setView={setView} />}
+      {activeTab === 'yours'
+        ? <YourModels saved={saved} setView={setView} />
+        : <Catalog setView={setView} />}
     </div>
   )
 }
 
 // --- Your trained models ----------------------------------------------------
 
-function YourModels({ setView }: { setView: (v: any) => void }) {
-  const dataVersion = useStore((s) => s.dataVersion)
+function YourModels({ saved, setView }:
+  { saved: AsyncResult<{ models: TrainedModel[] }>; setView: (v: any) => void }) {
   const bump = useStore((s) => s.bump)
-  const { data, loading, error, reload } = useAsync(() => api.models.saved(), [dataVersion])
+  const { data, loading, error, reload } = saved
 
   const [confirm, setConfirm] = useState<TrainedModel | null>(null)
   const [deleting, setDeleting] = useState(false)

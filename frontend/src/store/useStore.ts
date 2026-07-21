@@ -38,6 +38,11 @@ interface Store {
   // live job updates from WebSocket
   liveJobs: Record<string, LiveJob>
   applyJobEvent: (jobId: string, patch: LiveJob) => void
+
+  // Bumped every time the live socket (re)connects. Views that failed while the
+  // backend was down watch this so they can refetch once it is back.
+  connectionEpoch: number
+  markConnected: () => void
 }
 
 export const useStore = create<Store>((set) => ({
@@ -63,4 +68,7 @@ export const useStore = create<Store>((set) => ({
   applyJobEvent: (jobId, patch) => set((s) => ({
     liveJobs: { ...s.liveJobs, [jobId]: { ...s.liveJobs[jobId], ...patch } },
   })),
+
+  connectionEpoch: 0,
+  markConnected: () => set((s) => ({ connectionEpoch: s.connectionEpoch + 1 })),
 }))

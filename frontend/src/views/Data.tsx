@@ -496,33 +496,96 @@ function HFConfig({ name, presetSubset, onBack, onClose }:
 }
 
 // --- hugging face: browse + search ------------------------------------------
+/** Verdict from the backend on whether a dataset can be trained on as-is. */
+interface Fit {
+  status: 'ready' | 'partial' | 'needs_mapping' | 'unknown'
+  training_type?: string | null
+  columns?: string[]
+  also_fits?: string[]
+  detail?: string
+  split?: string
+  subset?: string | null
+}
+interface RecDataset { name: string; why: string; subset?: string; fit: Fit }
+interface RecGoal { goal: string; training_type: string; datasets: RecDataset[] }
+
+/**
+ * The point of this badge: say plainly whether you can press import and train,
+ * or whether you're in for a field-mapping session first.
+ */
+function FitBadge({ fit }: { fit?: Fit }) {
+  if (!fit) return <Badge tone="neutral">checking…</Badge>
+  switch (fit.status) {
+    case 'ready':
+      return <Badge tone="orange">Ready · {ttLabel(fit.training_type || '')}</Badge>
+    case 'partial':
+      return <Badge tone="amber">Partly usable</Badge>
+    case 'needs_mapping':
+      return <Badge tone="amber">Needs field mapping</Badge>
+    default:
+      return <Badge tone="neutral">Couldn’t check</Badge>
+  }
+}
+
+function FitDetail({ fit }: { fit?: Fit }) {
+  if (!fit) return null
+  return (
+    <>
+      {fit.detail && <p className="text-[11px] text-ink-mute mt-1.5">{fit.detail}</p>}
+      {!!fit.columns?.length && (
+        <p className="text-[11px] text-ink-mute mt-1 font-mono truncate">
+          {fit.columns.slice(0, 5).join(' · ')}
+        </p>
+      )}
+    </>
+  )
+}
+
 function HFBrowse({ onSelect }: { onSelect: (name: string, subset?: string) => void }) {
-  const { data: popular, loading: popLoading, error: popError } = useAsync<HFPopular>(() => api.hf.popular(), [])
+  const recommended = useAsync<{ goals: RecGoal[] }>(() => api.hf.recommended(), [])
   const [q, setQ] = useState('')
   const [results, setResults] = useState<HFSearchItem[] | null>(null)
   const [searching, setSearching] = useState(false)
+  // Fit verdicts arrive after the results, so cards render instantly and fill in.
+  const [fits, setFits] = useState<Record<string, Fit>>({})
 
   async function search(e?: React.FormEvent) {
     e?.preventDefault()
     if (!q.trim()) { setResults(null); return }
     setSearching(true)
+    setFits({})
     try {
       const res = await api.hf.search(q.trim(), 12)
-      setResults(res.datasets || [])
+      const items: HFSearchItem[] = res.datasets || []
+      setResults(items)
+      if (items.length) {
+        // Deliberately not awaited with the search: checking fit hits the HF
+        // viewer once per dataset, and results shouldn't wait on it.
+        api.hf.fit(items.map(i => i.name))
+          .then(r => setFits(r.fits || {}))
+          .catch(() => { /* badges just stay as "couldn't check" */ })
+      }
     } catch (err: any) { toast(err.message, 'error') } finally { setSearching(false) }
   }
 
-  const ResultCard = ({ item }: { item: HFSearchItem }) => (
-    <button onClick={() => onSelect(item.name)}
-      className="card card-pad text-left w-full hover:shadow-raised transition-shadow">
-      <div className="font-semibold text-ink break-all">{item.name}</div>
-      <p className="text-sm text-ink-soft mt-1 line-clamp-2">{item.description}</p>
-      <div className="flex items-center gap-3 mt-2 text-xs text-ink-mute">
-        <span className="inline-flex items-center gap-1"><Download className="w-3.5 h-3.5" /> {fmtInt(item.downloads)}</span>
-        <span className="inline-flex items-center gap-1"><Heart className="w-3.5 h-3.5" /> {fmtInt(item.likes)}</span>
-      </div>
-    </button>
-  )
+  const ResultCard = ({ item }: { item: HFSearchItem }) => {
+    const fit = fits[item.name]
+    return (
+      <button onClick={() => onSelect(item.name, fit?.subset || undefined)}
+        className="card card-pad text-left w-full hover:shadow-raised transition-shadow">
+        <div className="flex items-start justify-between gap-2">
+          <div className="font-semibold text-ink break-all">{item.name}</div>
+          <span className="shrink-0"><FitBadge fit={fit} /></span>
+        </div>
+        <p className="text-sm text-ink-soft mt-1 line-clamp-2">{item.description}</p>
+        <FitDetail fit={fit} />
+        <div className="flex items-center gap-3 mt-2 text-xs text-ink-mute">
+          <span className="inline-flex items-center gap-1"><Download className="w-3.5 h-3.5" /> {fmtInt(item.downloads)}</span>
+          <span className="inline-flex items-center gap-1"><Heart className="w-3.5 h-3.5" /> {fmtInt(item.likes)}</span>
+        </div>
+      </button>
+    )
+  }
 
   return (
     <div className="space-y-5">
@@ -542,23 +605,32 @@ function HFBrowse({ onSelect }: { onSelect: (name: string, subset?: string) => v
           </div>
         ) : <p className="text-sm text-ink-mute">No datasets matched “{q}”. Try a different search.</p>
       ) : (
-        <div className="space-y-5">
-          <p className="text-sm text-ink-soft">Or start from a popular, ready-to-use dataset:</p>
-          {popLoading && <div className="flex justify-center py-6"><Spinner className="w-6 h-6" /></div>}
-          {popError && <p className="text-sm text-berry-ink">{popError}</p>}
-          {popular && (['sl', 'dpo', 'rl'] as const).map(key => (
-            <div key={key}>
+        <div className="space-y-6">
+          <p className="text-sm text-ink-soft">
+            Not sure what to pick? Start from what you want the model to do — every
+            suggestion below was just checked against Hugging Face, so the badge tells
+            you whether it will train as-is.
+          </p>
+
+          {recommended.loading && <div className="flex justify-center py-8"><Spinner className="w-6 h-6" /></div>}
+          {recommended.error && <p className="text-sm text-berry-ink">{recommended.error}</p>}
+
+          {recommended.data?.goals?.map(g => (
+            <div key={g.goal}>
               <div className="flex items-center gap-1.5 mb-2">
-                <span className={`badge badge-${ttTone(key)}`}>{ttLabel(key)}</span>
-                <InfoTip term={key} />
+                <h4 className="font-display font-bold text-ink">{g.goal}</h4>
+                <InfoTip term={g.training_type} />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {(popular[key] || []).map(item => (
-                  <button key={item.name} onClick={() => onSelect(item.name, item.subset)}
+                {g.datasets.map(d => (
+                  <button key={d.name} onClick={() => onSelect(d.name, d.fit?.subset || d.subset)}
                     className="card card-pad text-left w-full hover:shadow-raised transition-shadow">
-                    <div className="font-semibold text-ink break-all">{item.name}</div>
-                    <p className="text-sm text-ink-soft mt-1">{item.description}</p>
-                    {item.samples != null && <p className="text-xs text-ink-mute mt-1.5">~{fmtInt(item.samples)} examples</p>}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="font-semibold text-ink break-all">{d.name}</div>
+                      <span className="shrink-0"><FitBadge fit={d.fit} /></span>
+                    </div>
+                    <p className="text-sm text-ink-soft mt-1">{d.why}</p>
+                    <FitDetail fit={d.fit} />
                   </button>
                 ))}
               </div>

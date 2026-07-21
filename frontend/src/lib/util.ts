@@ -13,6 +13,12 @@ export interface TrainingTypeMeta {
   label: string
   /** One-line plain-English explanation, shown as helper text. */
   short: string
+  /** The columns your dataset must have for this method. */
+  needs: string
+  /** When to reach for this method over the others. */
+  goodFor: string
+  /** A concrete, one-line example of a single training row. */
+  example: string
   /** Class for a <Dot />, e.g. "bg-orange". */
   dot: string
   /** Badge class from index.css, e.g. "badge-orange". */
@@ -27,24 +33,36 @@ export const TRAINING_TYPES: Record<string, TrainingTypeMeta> = {
   sl: {
     label: 'Supervised',
     short: 'Show the model example answers and it learns to copy them.',
+    needs: 'A prompt and the ideal answer for each example.',
+    goodFor: 'Teaching a format, a tone, or a specific task. Start here if you’re unsure.',
+    example: '“Summarise this ticket” → the summary you’d actually write.',
     dot: 'bg-orange',
     accent: 'badge-orange',
   },
   dpo: {
     label: 'Preference',
     short: 'Show two answers and pick the better one — the model learns your taste.',
+    needs: 'A prompt plus two answers: one chosen, one rejected.',
+    goodFor: 'Style, tone and judgement — when “better” is easier to point at than to write.',
+    example: 'Same question, your preferred reply vs. the one that missed.',
     dot: 'bg-charcoal',
     accent: 'badge-dark',
   },
   rl: {
     label: 'Reinforcement',
     short: 'The model tries answers and is scored, so it improves by practising.',
+    needs: 'A prompt, and a way to score the answer (usually a reference answer).',
+    goodFor: 'Tasks with a checkable right answer — maths, code, strict formats.',
+    example: '“What’s 17 × 23?” → scored against 391.',
     dot: 'bg-amber',
     accent: 'badge-amber',
   },
   multi_agent: {
     label: 'Multi-agent',
     short: 'Several models train together, competing or cooperating on tasks.',
+    needs: 'A set of tasks the agents can attempt and be scored on.',
+    goodFor: 'Pushing past what one model reaches alone, by having them compete.',
+    example: 'Three agents answer the same problem; the best answer wins the round.',
     dot: 'bg-berry',
     accent: 'badge-berry',
   },

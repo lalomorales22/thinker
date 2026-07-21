@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store/useStore'
+import { isOfflineError } from './api'
+
+/** Retries for a backend that isn't answering yet (1s, 2s, 4s, 8s). */
+const MAX_RETRIES = 4
 
 // --- useAsync ---------------------------------------------------------------
 
@@ -30,15 +34,25 @@ export function useAsync<T = any>(fn: () => Promise<T>, deps: unknown[] = []): A
   const mounted = useRef(true)
   // Bumped per request so a slow earlier fetch can't overwrite a newer result.
   const seq = useRef(0)
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const attempt = useRef(0)
+  const failed = useRef(false)
+  // Lets the retry timer call the latest runner without a circular reference.
+  const runRef = useRef<() => Promise<void>>()
 
   useEffect(() => {
     mounted.current = true
     return () => {
       mounted.current = false
+      if (retryTimer.current) clearTimeout(retryTimer.current)
     }
   }, [])
 
   const run = useCallback(async () => {
+    if (retryTimer.current) {
+      clearTimeout(retryTimer.current)
+      retryTimer.current = null
+    }
     const ticket = ++seq.current
     setLoading(true)
     setError(null)
@@ -47,19 +61,47 @@ export function useAsync<T = any>(fn: () => Promise<T>, deps: unknown[] = []): A
       if (!mounted.current || ticket !== seq.current) return
       setData(result)
       setError(null)
+      failed.current = false
+      attempt.current = 0
     } catch (e: unknown) {
       if (!mounted.current || ticket !== seq.current) return
       setData(null)
       setError(e instanceof Error ? e.message : String(e ?? 'Something went wrong'))
+      failed.current = true
+      // The backend may simply still be booting — back off and try again rather
+      // than stranding the view on an error until the user reloads by hand.
+      if (isOfflineError(e) && attempt.current < MAX_RETRIES) {
+        const delay = 1000 * 2 ** attempt.current
+        attempt.current += 1
+        retryTimer.current = setTimeout(() => {
+          retryTimer.current = null
+          void runRef.current?.()
+        }, delay)
+      }
     } finally {
       if (mounted.current && ticket === seq.current) setLoading(false)
     }
   }, [])
+  runRef.current = run
 
   useEffect(() => {
+    attempt.current = 0
     void run()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps)
+
+  // The socket reconnecting means the backend is back. Anything that failed
+  // while it was down gets one more go, so views heal without a manual reload.
+  const epoch = useStore((s) => s.connectionEpoch)
+  const lastEpoch = useRef(epoch)
+  useEffect(() => {
+    if (epoch === lastEpoch.current) return
+    lastEpoch.current = epoch
+    if (failed.current) {
+      attempt.current = 0
+      void run()
+    }
+  }, [epoch, run])
 
   return { data, loading, error, reload: run }
 }
@@ -99,7 +141,7 @@ export function useLiveConnection(): boolean {
     let ping: ReturnType<typeof setInterval> | null = null
     let attempt = 0
 
-    const { applyJobEvent, bump } = useStore.getState()
+    const { applyJobEvent, bump, markConnected } = useStore.getState()
 
     function connect() {
       if (closed) return
@@ -115,6 +157,8 @@ export function useLiveConnection(): boolean {
         if (closed) return
         attempt = 0
         setConnected(true)
+        // Tell any view that errored out while the backend was down to refetch.
+        markConnected()
         // The server reads from the socket in a loop; a periodic ping keeps
         // proxies from closing an otherwise-idle connection.
         ping = setInterval(() => {

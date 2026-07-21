@@ -94,6 +94,22 @@ function settings() {
   }
 }
 
+const OFFLINE = Symbol.for('thinker.offline')
+
+/** The backend didn't answer at all — as opposed to answering with an error. */
+function offlineError(baseUrl: string): Error {
+  const err = new Error(
+    `Can’t reach the Thinker backend at ${baseUrl}. Start it with ./START_UI.sh, or change the address in Settings.`,
+  )
+  ;(err as any)[OFFLINE] = true
+  return err
+}
+
+/** True when a request failed because nothing was listening, so a retry may work. */
+export function isOfflineError(e: unknown): boolean {
+  return !!(e && typeof e === 'object' && (e as any)[OFFLINE])
+}
+
 /** Pull a readable message out of the backend's `{error, message, ...}` body. */
 async function errorMessage(res: Response): Promise<string> {
   let body: any = null
@@ -147,9 +163,9 @@ async function request<T = any>(path: string, opts: RequestOpts = {}): Promise<T
       body: opts.form ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined),
     })
   } catch {
-    throw new Error(
-      `Can’t reach the Thinker backend at ${baseUrl}. Start it with ./START_UI.sh, or change the address in Settings.`,
-    )
+    // Tagged so useAsync can tell "backend isn't up yet" (worth retrying) apart
+    // from a real 4xx/5xx (not worth retrying).
+    throw offlineError(baseUrl)
   }
 
   if (!res.ok) throw new Error(await errorMessage(res))
@@ -258,6 +274,10 @@ export const api = {
     search: (query: string, limit = 12) =>
       request<{ datasets: any[] }>('/api/huggingface/search', { query: { query, limit } }),
     popular: () => request<any>('/api/huggingface/popular'),
+    /** Goal-first starting points, each carrying a live "will this train?" verdict. */
+    recommended: () => request<any>('/api/huggingface/recommended'),
+    /** Batch fit-check: can these datasets be trained on as-is? */
+    fit: (datasets: string[]) => request<any>('/api/huggingface/fit', { body: { datasets } }),
     // The route is declared as `{dataset_name:path}`, so keep the "org/name"
     // slash intact — encoding it would 404.
     info: (name: string) => request<any>(`/api/huggingface/info/${name}`),

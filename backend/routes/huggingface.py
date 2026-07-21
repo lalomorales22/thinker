@@ -18,6 +18,7 @@ This version:
 """
 from __future__ import annotations
 
+import asyncio
 import itertools
 import json
 import os
@@ -153,7 +154,9 @@ async def search_datasets(query: str = "", limit: int = 12):
     try:
         api = HfApi()
         results = []
-        for d in api.list_datasets(search=query or None, limit=limit, sort="downloads", direction=-1):
+        # `direction` was removed in huggingface_hub 1.x; sort="downloads" is
+        # already descending there. Passing it raises TypeError and 502s.
+        for d in api.list_datasets(search=query or None, limit=limit, sort="downloads"):
             results.append({
                 "name": d.id,
                 "description": (getattr(d, "description", "") or "").strip()[:200] or f"Dataset: {d.id}",
@@ -185,6 +188,169 @@ async def popular():
             {"name": "openai/openai_humaneval", "description": "164 Python coding problems", "samples": 164},
         ],
     }
+
+
+# --- "will this actually train?" ---------------------------------------------
+
+# Curated starting points, organised by what the user is trying to achieve
+# rather than by dataset name. Row counts and readiness are NOT hardcoded here —
+# they come from the live fit check, so this list can't go stale and lie.
+RECOMMENDED: list[dict[str, Any]] = [
+    {
+        "goal": "Make it follow instructions like a general assistant",
+        "training_type": "sl",
+        "datasets": [
+            {"name": "HuggingFaceH4/no_robots",
+             "why": "Human-written, not machine-generated. Small and unusually clean — the best first run."},
+            {"name": "databricks/databricks-dolly-15k",
+             "why": "Real employee-written instructions across 8 task types. Permissive licence."},
+            {"name": "tatsu-lab/alpaca",
+             "why": "The classic 52k instruction set. Big and easy, though machine-generated."},
+        ],
+    },
+    {
+        "goal": "Teach it to write and explain code",
+        "training_type": "sl",
+        "datasets": [
+            {"name": "sahil2801/CodeAlpaca-20k",
+             "why": "20k coding instructions with solutions. Straight prompt/completion shape."},
+            {"name": "openai/openai_humaneval",
+             "why": "164 hand-written Python problems. Tiny — better for evaluating than training."},
+        ],
+    },
+    {
+        "goal": "Match my tone and taste in how it answers",
+        "training_type": "dpo",
+        "datasets": [
+            {"name": "HuggingFaceH4/ultrafeedback_binarized",
+             "why": "Purpose-built for DPO — already binarised into chosen/rejected."},
+            {"name": "Anthropic/hh-rlhf",
+             "why": "Large helpful/harmless preference set. Note: the prompt is baked into the "
+                    "chosen/rejected text rather than sitting in its own column, so it needs mapping."},
+        ],
+    },
+    {
+        "goal": "Get it right on problems with a checkable answer",
+        "training_type": "rl",
+        "datasets": [
+            {"name": "openai/gsm8k", "subset": "main",
+             "why": "Grade-school maths word problems with exact answers to score against."},
+        ],
+    },
+]
+
+
+def _fit_from_rows(rows: list[dict[str, Any]], prefer: Optional[str] = None) -> dict[str, Any]:
+    """Work out which training type a sample of rows can actually feed.
+
+    Order matters. Almost anything with a prompt-like column satisfies RL, so
+    leading with it would mislabel real DPO/SL sets — hence most-specific-first.
+    When the caller already has a type in mind (`prefer`), that is checked first
+    so a set which suits several types isn't reported under the wrong one.
+    """
+    order = ["dpo", "sl", "rl"]
+    if prefer in order:
+        order = [prefer] + [t for t in order if t != prefer]
+
+    per_type = {}
+    for tt in order:
+        v = datautil.validate(rows, tt)
+        per_type[tt] = {"usable": v["usable"], "total": v["total"]}
+
+    best = next((tt for tt in order if per_type[tt]["usable"] > 0), None)
+    columns = datautil.detect_columns(rows)
+    also = [t for t in order if t != best and per_type[t]["usable"] > 0]
+
+    if not best:
+        return {"status": "needs_mapping", "training_type": None, "columns": columns,
+                "also_fits": [],
+                "detail": "No standard prompt/answer columns found — you'll map fields by hand.",
+                "per_type": per_type}
+
+    usable, total = per_type[best]["usable"], per_type[best]["total"]
+    if usable == total:
+        return {"status": "ready", "training_type": best, "columns": columns, "also_fits": also,
+                "detail": "Columns already match — no field mapping needed.", "per_type": per_type}
+    return {"status": "partial", "training_type": best, "columns": columns, "also_fits": also,
+            "detail": f"{usable} of {total} sampled rows have the fields needed; the rest would be skipped.",
+            "per_type": per_type}
+
+
+async def _resolve_split(name: str, subset: Optional[str]) -> tuple[str, Optional[str]]:
+    """Find a split that actually exists.
+
+    Assuming "train" silently fails on real datasets — humaneval only ships
+    `test`, and ultrafeedback_binarized uses `train_prefs`/`train_sft`.
+    """
+    try:
+        entries = await asyncio.wait_for(_viewer_splits(name), timeout=10)
+    except Exception:
+        entries = []
+    if not entries:
+        return "train", subset
+
+    scoped = [e for e in entries if e.get("config") == subset] if subset else entries
+    scoped = scoped or entries
+    pick = next((e for e in scoped if "train" in (e.get("split") or "").lower()), scoped[0])
+    return (pick.get("split") or "train"), (subset or pick.get("config"))
+
+
+async def _fit_one(name: str, subset: Optional[str] = None,
+                   prefer: Optional[str] = None) -> dict[str, Any]:
+    split, config = await _resolve_split(name, subset)
+    try:
+        rows, err = await asyncio.wait_for(fetch_rows(name, split, config, 5), timeout=15)
+    except asyncio.TimeoutError:
+        return {"status": "unknown", "detail": "Timed out asking HuggingFace about this dataset."}
+    except Exception as e:
+        return {"status": "unknown", "detail": f"Couldn't inspect this dataset: {e}"}
+    if not rows:
+        return {"status": "unknown",
+                "detail": err or "No preview rows available (may be gated or very large)."}
+    # Hand back the split/subset we proved works, so import doesn't re-guess.
+    return {**_fit_from_rows(rows, prefer), "split": split, "subset": config}
+
+
+class FitRequest(BaseModel):
+    datasets: list[str] = Field(default_factory=list)
+
+
+@router.post("/fit")
+async def fit(req: FitRequest):
+    """Can each of these datasets be trained on as-is? Checked concurrently."""
+    names = req.datasets[:16]
+    if not names:
+        return {"fits": {}}
+    results = await asyncio.gather(*(_fit_one(n) for n in names), return_exceptions=True)
+    fits: dict[str, Any] = {}
+    for name, res in zip(names, results):
+        fits[name] = ({"status": "unknown", "detail": "Inspection failed."}
+                      if isinstance(res, BaseException) else res)
+    return {"fits": fits}
+
+
+@router.get("/recommended")
+async def recommended():
+    """Goal-first starting points, each with a live fit verdict."""
+    flat = [(g["training_type"], d) for g in RECOMMENDED for d in g["datasets"]]
+    verdicts = await asyncio.gather(
+        *(_fit_one(d["name"], d.get("subset"), prefer=tt) for tt, d in flat),
+        return_exceptions=True)
+
+    by_name: dict[str, Any] = {}
+    for (_, d), res in zip(flat, verdicts):
+        by_name[d["name"]] = ({"status": "unknown", "detail": "Inspection failed."}
+                              if isinstance(res, BaseException) else res)
+
+    goals = []
+    for g in RECOMMENDED:
+        goals.append({
+            "goal": g["goal"],
+            "training_type": g["training_type"],
+            "datasets": [{**d, "fit": by_name.get(d["name"], {"status": "unknown"})}
+                         for d in g["datasets"]],
+        })
+    return {"goals": goals}
 
 
 @router.get("/info/{dataset_name:path}")
