@@ -289,3 +289,64 @@ def iter_examples(rows: list[dict[str, Any]], training_type: str):
             ex = to_messages(r)
         if ex is not None:
             yield ex
+
+
+def suggest_mapping(columns: list[str], training_type: str) -> dict[str, str]:
+    """Best-guess source column for each target field of a training type.
+
+    Uses the same alias lists the loaders use, so a suggestion that looks right
+    in the UI is one the trainer will actually accept.
+    """
+    tt = (training_type or "sl").lower()
+    targets = {
+        "sl": [("prompt", PROMPT_KEYS), ("completion", COMPLETION_KEYS)],
+        "dpo": [("prompt", PROMPT_KEYS), ("chosen", CHOSEN_KEYS), ("rejected", REJECTED_KEYS)],
+        "rl": [("prompt", PROMPT_KEYS), ("reference", REFERENCE_KEYS)],
+    }.get(tt, [("prompt", PROMPT_KEYS), ("completion", COMPLETION_KEYS)])
+
+    lower = {c.lower(): c for c in columns}
+    out: dict[str, str] = {}
+    taken: set[str] = set()
+    for target, aliases in targets:
+        for alias in aliases:
+            col = lower.get(alias)
+            if col and col not in taken:
+                out[target] = col
+                taken.add(col)
+                break
+    return out
+
+
+def fit_from_rows(rows: list[dict[str, Any]], prefer: Optional[str] = None) -> dict[str, Any]:
+    """Which training type can these rows actually feed, and is mapping needed?
+
+    Order matters. Almost anything with a prompt-like column satisfies RL, so
+    leading with it would mislabel real DPO/SL data — hence most-specific-first.
+    When the caller already has a type in mind (`prefer`), it is checked first
+    so data suiting several types isn't reported under the wrong one.
+    """
+    order = ["dpo", "sl", "rl"]
+    if prefer in order:
+        order = [prefer] + [t for t in order if t != prefer]
+
+    per_type = {}
+    for tt in order:
+        v = validate(rows, tt)
+        per_type[tt] = {"usable": v["usable"], "total": v["total"]}
+
+    best = next((tt for tt in order if per_type[tt]["usable"] > 0), None)
+    columns = detect_columns(rows)
+    also = [t for t in order if t != best and per_type[t]["usable"] > 0]
+
+    if not best:
+        return {"status": "needs_mapping", "training_type": None, "columns": columns, "also_fits": [],
+                "detail": "No standard prompt/answer columns found — you'll map fields by hand.",
+                "per_type": per_type}
+
+    usable, total = per_type[best]["usable"], per_type[best]["total"]
+    if usable == total:
+        return {"status": "ready", "training_type": best, "columns": columns, "also_fits": also,
+                "detail": "Columns already match — no field mapping needed.", "per_type": per_type}
+    return {"status": "partial", "training_type": best, "columns": columns, "also_fits": also,
+            "detail": f"{usable} of {total} sampled rows have the fields needed; the rest would be skipped.",
+            "per_type": per_type}

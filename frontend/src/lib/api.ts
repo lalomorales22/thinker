@@ -230,6 +230,20 @@ export const api = {
   datasets: {
     list: () => request<{ datasets: Dataset[] }>('/api/datasets/'),
     upload: (form: FormData) => request<{ dataset: Dataset }>('/api/datasets/upload', { form }),
+    /** Parse a file and report columns, fit, secrets — storing nothing permanent. */
+    inspect: (form: FormData) => request<any>('/api/datasets/inspect', { form }),
+    /** Show the training examples a given field mapping would actually produce. */
+    previewMapping: (body: { staging_id: string; training_type: string; mapping: Record<string, string> }) =>
+      request<any>('/api/datasets/preview-mapping', { body }),
+    /** Promote an inspected file into a real, trainable dataset. */
+    commit: (body: {
+      staging_id: string; name: string; training_type: string
+      mapping: Record<string, string>
+      train_split?: number; val_split?: number; test_split?: number
+      secrets_action?: 'keep' | 'scrub' | 'drop_rows'
+    }) => request<any>('/api/datasets/commit', { body }),
+    discard: (id: string) =>
+      request<any>(`/api/datasets/discard/${encodeURIComponent(id)}`, { method: 'POST' }),
     create: (body: { name: string; training_type: string; rows: any[] }) =>
       request<{ dataset: Dataset }>('/api/datasets/create', { body }),
     templates: () => request<Record<string, any>>('/api/datasets/templates'),

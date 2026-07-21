@@ -9,6 +9,7 @@ beginner exactly what (if anything) is wrong before they try to train.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import shutil
@@ -21,13 +22,31 @@ from pydantic import BaseModel
 
 import db
 from config import DATASETS_DIR
-from training import datautil
+from training import datautil, secrets
 from utils import logger
 
 router = APIRouter()
 
 VALID_FORMATS = {"jsonl", "json", "csv"}
 VALID_TYPES = {"sl", "dpo", "rl", "any"}
+
+# Files held between /inspect and /commit. Staged content lives on disk under
+# DATASETS_DIR/.staging so a big upload isn't kept in memory, and is only
+# promoted to a real dataset once the user has seen what's in it.
+STAGING_DIR = DATASETS_DIR / ".staging"
+STAGING_DIR.mkdir(parents=True, exist_ok=True)
+_staged: dict[str, dict[str, Any]] = {}
+# Rows parsed for analysis. Anything beyond this is imported but not inspected.
+INSPECT_LIMIT = 2000
+
+
+def _discard_staged(staging_id: str) -> None:
+    info = _staged.pop(staging_id, None)
+    if info and os.path.exists(info["path"]):
+        try:
+            os.remove(info["path"])
+        except OSError:
+            pass
 
 
 def _now() -> str:
@@ -129,6 +148,209 @@ async def upload_dataset(
             os.remove(path)
         logger.error(f"Upload failed: {e}", exc_info=True)
         raise HTTPException(500, f"Upload failed: {e}")
+
+
+# --- inspect → map → preview → commit ----------------------------------------
+
+@router.post("/inspect")
+async def inspect_dataset(file: UploadFile = File(...), format: str = Form("")):
+    """Parse an uploaded file and report what's in it — storing nothing permanent.
+
+    The old flow imported first and validated after, so a file whose columns
+    didn't match became a dataset flagged broken only once it was already in
+    your list. This answers the questions up front: what columns are here, what
+    can it train, what would a real example look like, and does it contain
+    credentials that shouldn't be uploaded anywhere.
+    """
+    fname = os.path.basename(file.filename or "dataset.jsonl")
+    fmt = (format or "").lower()
+    if fmt not in VALID_FORMATS:
+        lower = fname.lower()
+        fmt = "csv" if lower.endswith(".csv") else "json" if lower.endswith(".json") else "jsonl"
+
+    staging_id = f"stg_{uuid.uuid4().hex[:12]}"
+    path = str(STAGING_DIR / f"{staging_id}_{fname}")
+    try:
+        with open(path, "wb") as buf:
+            shutil.copyfileobj(file.file, buf)
+    except Exception as e:
+        raise HTTPException(500, f"Couldn't read the uploaded file: {e}")
+
+    try:
+        rows = datautil.load_rows(path, fmt, limit=INSPECT_LIMIT)
+    except Exception as e:
+        os.remove(path)
+        raise HTTPException(400, f"Couldn't parse this as {fmt.upper()}: {e}")
+
+    if not rows:
+        os.remove(path)
+        raise HTTPException(
+            400,
+            f"No rows found in {fname}. For JSONL each line must be a JSON object; "
+            "for JSON it should be a list of objects; for CSV it needs a header row.",
+        )
+
+    fit = datautil.fit_from_rows(rows)
+    scan = secrets.scan_rows(rows)
+    columns = datautil.flatten_paths(rows[0]) if rows else []
+    # Union of top-level keys and nested paths, so nested JSON is mappable too.
+    for c in fit["columns"]:
+        if c not in columns:
+            columns.append(c)
+
+    _staged[staging_id] = {"path": path, "fmt": fmt, "filename": fname,
+                           "rows_sampled": len(rows), "created_at": _now()}
+
+    return {
+        "staging_id": staging_id,
+        "filename": fname,
+        "format": fmt,
+        "rows_sampled": len(rows),
+        "truncated": len(rows) >= INSPECT_LIMIT,
+        "columns": columns,
+        "fit": fit,
+        "secrets": scan,
+        "suggested_mapping": {
+            tt: datautil.suggest_mapping(columns, tt) for tt in ("sl", "dpo", "rl")
+        },
+        "sample_rows": rows[:5],
+    }
+
+
+class CommitRequest(BaseModel):
+    staging_id: str
+    name: str
+    training_type: str = "sl"
+    # target field -> source column (dot-paths allowed, e.g. "message.content")
+    mapping: dict[str, str] = {}
+    train_split: int = 80
+    val_split: int = 10
+    test_split: int = 10
+    # What to do about detected credentials: "keep" | "scrub" | "drop_rows"
+    secrets_action: str = "scrub"
+
+
+@router.post("/commit")
+async def commit_staged(req: CommitRequest):
+    """Turn an inspected file into a real, trainable dataset."""
+    info = _staged.get(req.staging_id)
+    if not info:
+        raise HTTPException(404, "That upload has expired. Choose the file again.")
+    tt = (req.training_type or "sl").lower()
+    if tt not in VALID_TYPES:
+        raise HTTPException(400, f"Invalid training type '{tt}'.")
+    if req.train_split + req.val_split + req.test_split != 100:
+        raise HTTPException(400, "Splits must add up to 100%.")
+
+    rows = datautil.load_rows(info["path"], info["fmt"])
+    if not rows:
+        raise HTTPException(400, "No rows found in the staged file.")
+
+    # Apply mapping additively — keep the original columns and add the aliases,
+    # so data living in an unmapped column still reaches the trainer.
+    if req.mapping:
+        mapped = []
+        for item in rows:
+            row = dict(item)
+            for target, source in req.mapping.items():
+                if not source:
+                    continue
+                val = datautil.get_path(item, source)
+                if val is not None:
+                    row[target] = val
+            mapped.append(row)
+        rows = mapped
+
+    # Handle credentials before anything is written to disk.
+    scan = secrets.scan_rows(rows)
+    redactions = 0
+    if scan["count"]:
+        if req.secrets_action == "drop_rows":
+            affected = set(scan["affected_rows"])
+            rows = [r for i, r in enumerate(rows) if i not in affected]
+            if not rows:
+                raise HTTPException(400, "Every row contained credentials, so nothing is left to import.")
+        elif req.secrets_action != "keep":
+            rows, redactions = secrets.scrub_rows(rows)
+
+    check = datautil.validate(rows, tt if tt in ("sl", "dpo", "rl") else "sl")
+    if not check["ok"]:
+        raise HTTPException(
+            400,
+            f"After mapping, no rows can feed {tt.upper()} training. " + " ".join(check["notes"]),
+        )
+
+    dataset_id = str(uuid.uuid4())
+    path = str(DATASETS_DIR / f"{dataset_id}_{os.path.splitext(info['filename'])[0]}.jsonl")
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+
+    num = len(rows)
+    rec = {
+        "id": dataset_id, "name": req.name.strip() or info["filename"], "source": "upload",
+        "training_type": tt, "format": "jsonl", "path": path, "num_samples": num,
+        "size_bytes": os.path.getsize(path), "columns": check["columns"],
+        "split": {
+            "train": int(num * req.train_split / 100),
+            "validation": int(num * req.val_split / 100),
+            "test": num - int(num * req.train_split / 100) - int(num * req.val_split / 100),
+        },
+        "schema_ok": check["ok"], "schema_notes": check["notes"],
+        "meta": {"original_filename": info["filename"], "mapping": req.mapping,
+                 "secrets_found": scan["count"], "secrets_action": req.secrets_action,
+                 "redactions": redactions},
+        "created_at": _now(),
+    }
+    dataset = db.add_dataset(rec)
+    _discard_staged(req.staging_id)
+    logger.info(f"Committed '{rec['name']}' ({num} rows, {scan['count']} secrets, action={req.secrets_action})")
+    return {"dataset": dataset, "secrets_found": scan["count"], "redactions": redactions}
+
+
+@router.post("/discard/{staging_id}")
+async def discard(staging_id: str):
+    """Drop a staged file the user backed out of."""
+    _discard_staged(staging_id)
+    return {"message": "Discarded"}
+
+
+class PreviewMappingRequest(BaseModel):
+    staging_id: str
+    training_type: str = "sl"
+    mapping: dict[str, str] = {}
+
+
+@router.post("/preview-mapping")
+async def preview_mapping(req: PreviewMappingRequest):
+    """Show the actual training examples a mapping would produce.
+
+    This is the whole point of the flow: see real converted examples before
+    committing, rather than discovering the mapping was wrong after training.
+    """
+    info = _staged.get(req.staging_id)
+    if not info:
+        raise HTTPException(404, "That upload has expired. Choose the file again.")
+
+    rows = datautil.load_rows(info["path"], info["fmt"], limit=50)
+    if req.mapping:
+        mapped = []
+        for item in rows:
+            row = dict(item)
+            for target, source in req.mapping.items():
+                if not source:
+                    continue
+                val = datautil.get_path(item, source)
+                if val is not None:
+                    row[target] = val
+            mapped.append(row)
+        rows = mapped
+
+    tt = (req.training_type or "sl").lower()
+    check = datautil.validate(rows, tt if tt in ("sl", "dpo", "rl") else "sl")
+    examples = list(itertools.islice(datautil.iter_examples(rows, tt), 3))
+    return {"examples": examples, "usable": check["usable"], "sampled": len(rows),
+            "notes": check["notes"], "ok": check["ok"]}
 
 
 class CreateRequest(BaseModel):

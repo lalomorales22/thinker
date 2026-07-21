@@ -240,40 +240,9 @@ RECOMMENDED: list[dict[str, Any]] = [
 ]
 
 
-def _fit_from_rows(rows: list[dict[str, Any]], prefer: Optional[str] = None) -> dict[str, Any]:
-    """Work out which training type a sample of rows can actually feed.
-
-    Order matters. Almost anything with a prompt-like column satisfies RL, so
-    leading with it would mislabel real DPO/SL sets — hence most-specific-first.
-    When the caller already has a type in mind (`prefer`), that is checked first
-    so a set which suits several types isn't reported under the wrong one.
-    """
-    order = ["dpo", "sl", "rl"]
-    if prefer in order:
-        order = [prefer] + [t for t in order if t != prefer]
-
-    per_type = {}
-    for tt in order:
-        v = datautil.validate(rows, tt)
-        per_type[tt] = {"usable": v["usable"], "total": v["total"]}
-
-    best = next((tt for tt in order if per_type[tt]["usable"] > 0), None)
-    columns = datautil.detect_columns(rows)
-    also = [t for t in order if t != best and per_type[t]["usable"] > 0]
-
-    if not best:
-        return {"status": "needs_mapping", "training_type": None, "columns": columns,
-                "also_fits": [],
-                "detail": "No standard prompt/answer columns found — you'll map fields by hand.",
-                "per_type": per_type}
-
-    usable, total = per_type[best]["usable"], per_type[best]["total"]
-    if usable == total:
-        return {"status": "ready", "training_type": best, "columns": columns, "also_fits": also,
-                "detail": "Columns already match — no field mapping needed.", "per_type": per_type}
-    return {"status": "partial", "training_type": best, "columns": columns, "also_fits": also,
-            "detail": f"{usable} of {total} sampled rows have the fields needed; the rest would be skipped.",
-            "per_type": per_type}
+# The fit logic lives in datautil so the local-file ingester shares one
+# implementation with this one — two copies would drift.
+_fit_from_rows = datautil.fit_from_rows
 
 
 async def _resolve_split(name: str, subset: Optional[str]) -> tuple[str, Optional[str]]:

@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Database, UploadCloud, PencilLine, DownloadCloud, Plus, Trash2, Eye,
-  Rocket, Search, ArrowLeft, Heart, Download, X, FileJson,
+  Rocket, Search, ArrowLeft, Heart, Download, X, FileJson, AlertCircle,
 } from 'lucide-react'
 import { api, Dataset } from '../lib/api'
 import { useAsync } from '../lib/hooks'
 import { useStore } from '../store/useStore'
 import { InfoTip } from '../lib/glossary'
-import { TRAINING_TYPES, fmtInt, relTime } from '../lib/util'
+import { TRAINING_TYPES, fmtInt, relTime, cn } from '../lib/util'
 import {
   Button, IconButton, Card, Badge, Field, Input, Textarea, Select, Segmented,
   Progress, EmptyState, Spinner, Skeleton, Modal, toast,
@@ -197,63 +197,264 @@ function PreviewModal({ id, name, onClose }: { id: string; name: string; onClose
 }
 
 // --- upload modal -----------------------------------------------------------
+/** The fields each training type needs filled, in the order they're shown. */
+const MAP_TARGETS: Record<TT, string[]> = {
+  sl: ['prompt', 'completion'],
+  dpo: ['prompt', 'chosen', 'rejected'],
+  rl: ['prompt', 'reference'],
+}
+
+interface Inspection {
+  staging_id: string
+  filename: string
+  format: string
+  rows_sampled: number
+  truncated: boolean
+  columns: string[]
+  fit: Fit
+  secrets: {
+    count: number; rows_affected: number
+    findings: { row: number; field: string; label: string; match: string }[]
+    labels: Record<string, number>
+  }
+  suggested_mapping: Record<string, Record<string, string>>
+  sample_rows: any[]
+}
+
+type SecretsAction = 'scrub' | 'drop_rows' | 'keep'
+
+/**
+ * Upload in two steps: inspect, then commit.
+ *
+ * The previous flow asked for a name and a training type, imported, and only
+ * then validated — so a file with the wrong columns became a dataset flagged
+ * broken after the fact. Here nothing is stored until you've seen the columns,
+ * the fit verdict, any credentials found, and the real training rows.
+ */
 function UploadModal({ templates, onClose }: { templates: Templates | null; onClose: () => void }) {
   const bump = useStore(s => s.bump)
+  const [file, setFile] = useState<File | null>(null)
+  const [insp, setInsp] = useState<Inspection | null>(null)
+  const [inspecting, setInspecting] = useState(false)
+
   const [name, setName] = useState('')
   const [type, setType] = useState<TT>('sl')
-  const [file, setFile] = useState<File | null>(null)
+  const [mapping, setMapping] = useState<Record<string, string>>({})
+  const [secretsAction, setSecretsAction] = useState<SecretsAction>('scrub')
   const [splits, setSplits] = useState({ train: 80, val: 10, test: 10 })
+  const [preview, setPreview] = useState<{ examples: any[]; usable: number; sampled: number; notes: string[]; ok: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
-
-  const inferFormat = (fname: string): 'jsonl' | 'json' | 'csv' => {
-    const l = fname.toLowerCase()
-    if (l.endsWith('.csv')) return 'csv'
-    if (l.endsWith('.json')) return 'json'
-    return 'jsonl'
-  }
   const sum = splits.train + splits.val + splits.test
 
-  async function submit() {
+  async function runInspect() {
     if (!file) return toast('Choose a file first.', 'error')
+    setInspecting(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res: Inspection = await api.datasets.inspect(form)
+      setInsp(res)
+      const tt = (res.fit?.training_type as TT) || 'sl'
+      setType(tt)
+      setMapping(res.suggested_mapping?.[tt] ?? {})
+      setName(res.filename.replace(/\.(jsonl|json|csv)$/i, ''))
+      setSecretsAction(res.secrets.count ? 'scrub' : 'keep')
+    } catch (e: any) { toast(e.message, 'error') } finally { setInspecting(false) }
+  }
+
+  // Re-run the preview whenever the mapping or training type changes, so what's
+  // on screen always reflects what would actually be imported.
+  useEffect(() => {
+    if (!insp) return
+    let alive = true
+    api.datasets.previewMapping({ staging_id: insp.staging_id, training_type: type, mapping })
+      .then(r => { if (alive) setPreview(r) })
+      .catch(() => { if (alive) setPreview(null) })
+    return () => { alive = false }
+  }, [insp, type, mapping])
+
+  function changeType(tt: TT) {
+    setType(tt)
+    setMapping(insp?.suggested_mapping?.[tt] ?? {})
+  }
+
+  function close() {
+    // Don't leave the staged file sitting on disk if they back out.
+    if (insp) api.datasets.discard(insp.staging_id).catch(() => {})
+    onClose()
+  }
+
+  async function commit() {
+    if (!insp) return
     if (!name.trim()) return toast('Give your dataset a name.', 'error')
     if (sum !== 100) return toast(`Splits must add up to 100% (they add up to ${sum}%).`, 'error')
-    const form = new FormData()
-    form.append('file', file)
-    form.append('name', name.trim())
-    form.append('training_type', type)
-    form.append('format', inferFormat(file.name))
-    form.append('train_split', String(splits.train))
-    form.append('val_split', String(splits.val))
-    form.append('test_split', String(splits.test))
     setBusy(true)
     try {
-      await api.datasets.upload(form)
-      bump(); toast('Dataset uploaded.', 'ok'); onClose()
+      const res = await api.datasets.commit({
+        staging_id: insp.staging_id, name: name.trim(), training_type: type, mapping,
+        train_split: splits.train, val_split: splits.val, test_split: splits.test,
+        secrets_action: secretsAction,
+      })
+      bump()
+      const n = res.dataset?.num_samples
+      toast(res.redactions
+        ? `Imported ${fmtInt(n)} examples · ${res.redactions} credential${res.redactions === 1 ? '' : 's'} redacted`
+        : `Imported ${fmtInt(n)} examples.`, 'ok')
+      onClose()
     } catch (e: any) { toast(e.message, 'error') } finally { setBusy(false) }
   }
 
+  // --- step 1: choose a file ---
+  if (!insp) {
+    return (
+      <Modal open onClose={close} wide title="Upload a file"
+        subtitle="Bring a .jsonl, .json, or .csv — Thinker will read it before importing anything."
+        footer={<>
+          <Button variant="ghost" onClick={close}>Cancel</Button>
+          <Button icon={<UploadCloud className="w-4 h-4" />} loading={inspecting}
+            disabled={!file} onClick={runInspect}>Inspect file</Button>
+        </>}>
+        <div className="space-y-5">
+          <Field label="File" hint="Accepted: .jsonl (one JSON object per line), .json, or .csv.">
+            <input type="file" accept=".jsonl,.json,.csv"
+              onChange={e => { setFile(e.target.files?.[0] ?? null); setPreview(null) }}
+              className="block w-full text-sm text-ink-soft cursor-pointer file:mr-3 file:rounded-lg file:border-0 file:bg-charcoal file:text-white file:px-3 file:py-2 file:text-sm file:font-semibold" />
+            {file && <p className="hint mt-1.5 flex items-center gap-1"><FileJson className="w-3.5 h-3.5" /> {file.name}</p>}
+          </Field>
+          <p className="text-sm text-ink-soft">
+            Nothing is saved yet. Thinker reads the file, works out which columns it has and
+            what it can train, checks it for API keys and passwords, and shows you real
+            examples — then you decide whether to import.
+          </p>
+        </div>
+      </Modal>
+    )
+  }
+
+  // --- step 2: review what's in it ---
+  const targets = MAP_TARGETS[type]
+  const sec = insp.secrets
   return (
-    <Modal open onClose={onClose} wide title="Upload a file" subtitle="Bring a .jsonl, .json, or .csv of examples."
+    <Modal open onClose={close} wide title="What's in this file?"
+      subtitle={`${insp.filename} · ${fmtInt(insp.rows_sampled)}${insp.truncated ? '+' : ''} rows · ${insp.format.toUpperCase()}`}
       footer={<>
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button icon={<UploadCloud className="w-4 h-4" />} loading={busy} onClick={submit}>Upload</Button>
+        <Button variant="ghost" onClick={close}>Cancel</Button>
+        {/* Deliberately not "Import N examples": `usable` is measured on a
+            sample of the file, so quoting it as the import total would be a
+            number that doesn't match the dataset you end up with. */}
+        <Button icon={<UploadCloud className="w-4 h-4" />} loading={busy}
+          disabled={!preview?.ok} onClick={commit}>
+          {preview?.ok ? 'Import dataset' : 'Nothing to import yet'}
+        </Button>
       </>}>
       <div className="space-y-5">
-        <Field label="Dataset name">
-          <Input value={name} onChange={e => setName(e.target.value)} placeholder="My support replies" />
-        </Field>
+        <div className="flex items-center gap-2">
+          <FitBadge fit={insp.fit} />
+          <span className="text-sm text-ink-soft">{insp.fit.detail}</span>
+        </div>
+
+        {sec.count > 0 && (
+          <div className="rounded-xl2 border border-berry/40 bg-berry-soft/50 p-4">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-berry-ink shrink-0" />
+              <span className="font-display font-bold text-sm text-ink">
+                Found {sec.count} possible credential{sec.count === 1 ? '' : 's'} in {sec.rows_affected} row{sec.rows_affected === 1 ? '' : 's'}
+              </span>
+            </div>
+            <p className="text-xs text-ink-soft mt-1.5">
+              Training data is uploaded to Tinker, and anything the model memorises can resurface
+              in its answers later. Decide what happens to these before importing.
+            </p>
+            <ul className="mt-2.5 space-y-1">
+              {sec.findings.slice(0, 5).map((f, i) => (
+                <li key={i} className="text-[11px] font-mono text-ink-soft">
+                  row {f.row} · {f.field} · <span className="text-berry-ink">{f.label}</span> · {f.match}
+                </li>
+              ))}
+              {sec.findings.length > 5 && (
+                <li className="text-[11px] text-ink-mute">…and {sec.count - 5} more</li>
+              )}
+            </ul>
+            <div className="flex flex-wrap gap-2 mt-3">
+              {([['scrub', 'Replace with [REDACTED]'], ['drop_rows', 'Drop those rows'], ['keep', 'Import as-is']] as const).map(([v, label]) => (
+                <button key={v} onClick={() => setSecretsAction(v)}
+                  className={cn('badge cursor-pointer transition-colors',
+                    secretsAction === v ? 'badge-dark' : 'badge-outline hover:bg-line-soft')}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <Field label="What are you teaching?">
-          <TypePicker value={type} onChange={setType} templates={templates} />
+          <TypePicker value={type} onChange={changeType} templates={templates} />
         </Field>
 
-        <ExampleShape tpl={templates?.[type]} />
+        <Field label="Match your columns to what training needs"
+          hint="Left is what training expects; right is the column it comes from in your file.">
+          <div className="space-y-2">
+            {targets.map(t => (
+              <div key={t} className="flex items-center gap-3">
+                <span className="w-28 shrink-0 text-sm font-semibold text-ink flex items-center gap-1">
+                  {t}<InfoTip term={t} />
+                </span>
+                <span className="text-ink-mute">←</span>
+                <Select className="flex-1" value={mapping[t] ?? ''}
+                  onChange={e => setMapping(m => ({ ...m, [t]: e.target.value }))}>
+                  <option value="">— not set —</option>
+                  {insp.columns.map(c => <option key={c} value={c}>{c}</option>)}
+                </Select>
+              </div>
+            ))}
+          </div>
+        </Field>
 
-        <Field label="File" hint="Accepted: .jsonl (one JSON object per line), .json, or .csv.">
-          <input type="file" accept=".jsonl,.json,.csv"
-            onChange={e => setFile(e.target.files?.[0] ?? null)}
-            className="block w-full text-sm text-ink-soft cursor-pointer file:mr-3 file:rounded-lg file:border-0 file:bg-charcoal file:text-white file:px-3 file:py-2 file:text-sm file:font-semibold" />
-          {file && <p className="hint mt-1.5 flex items-center gap-1"><FileJson className="w-3.5 h-3.5" /> {file.name}</p>}
+        <div>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <h4 className="font-display font-bold text-sm text-ink">What will actually train</h4>
+            {preview && (
+              <span className={cn('badge', preview.ok ? 'badge-orange' : 'badge-amber')}>
+                {fmtInt(preview.usable)} of {fmtInt(preview.sampled)} sampled rows usable
+              </span>
+            )}
+          </div>
+          {preview && (
+            <p className="text-xs text-ink-mute mb-2">
+              Checked on the first {fmtInt(preview.sampled)} rows. Rows missing a required field
+              are still imported, but skipped during training.
+            </p>
+          )}
+          {!preview ? (
+            <div className="flex justify-center py-6"><Spinner className="w-5 h-5" /></div>
+          ) : preview.examples.length === 0 ? (
+            <p className="text-sm text-berry-ink">
+              {preview.notes[0] || 'This mapping doesn’t produce any usable examples yet.'}
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {preview.examples.map((ex, i) => (
+                <div key={i} className="rounded-xl border border-line bg-raised p-3 space-y-1.5">
+                  {(Array.isArray(ex) ? ex : ex.messages ?? []).map((m: any, j: number) => (
+                    <div key={j} className="text-xs">
+                      <span className="font-mono font-semibold text-orange-ink">{m.role}</span>
+                      <span className="text-ink-soft"> · {String(m.content).slice(0, 220)}</span>
+                    </div>
+                  ))}
+                  {!Array.isArray(ex) && !ex.messages && (
+                    <pre className="text-[11px] font-mono text-ink-soft whitespace-pre-wrap">
+                      {JSON.stringify(ex, null, 2).slice(0, 400)}
+                    </pre>
+                  )}
+                </div>
+              ))}
+              {preview.notes.map((n, i) => <p key={i} className="text-xs text-ink-mute">{n}</p>)}
+            </div>
+          )}
+        </div>
+
+        <Field label="Dataset name">
+          <Input value={name} onChange={e => setName(e.target.value)} placeholder="My support replies" />
         </Field>
 
         <Field label="Train / validation / test split" term="split"
