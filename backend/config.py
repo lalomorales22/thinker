@@ -46,6 +46,17 @@ def get_tinker_api_key(header_key: str | None = None) -> str | None:
     return key or None
 
 
+def get_anthropic_api_key(header_key: str | None = None) -> str | None:
+    """Resolve the Anthropic API key from an explicit header value, then env.
+
+    Used only for the optional Claude teacher in the Voice page — Thinker's
+    training path never touches it. Same rules as the Tinker key: empty strings
+    count as absent, and the key itself is never logged.
+    """
+    key = (header_key or "").strip() or os.getenv("ANTHROPIC_API_KEY", "").strip()
+    return key or None
+
+
 def mask_key(key: str | None) -> str:
     """Return a safe, masked representation of an API key for logging."""
     if not key:

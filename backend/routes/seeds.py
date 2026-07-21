@@ -26,11 +26,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 import db
-from config import DATA_DIR, DATASETS_DIR, OLLAMA_MODEL, OLLAMA_URL
+from config import (DATA_DIR, DATASETS_DIR, OLLAMA_MODEL, OLLAMA_URL,
+                    get_anthropic_api_key)
 from training import datautil
 from utils import logger
 
@@ -138,11 +139,55 @@ Return ONLY a JSON array. Each item is an array of turns:
 No prose, no code fences, no commentary — just the JSON array."""
 
 
+# Claude enforces this server-side via structured outputs, so the reply is
+# guaranteed to parse — no fence-stripping or bracket-hunting needed.
+CONVERSATIONS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "conversations": {
+            "type": "array",
+            "description": "The new exchanges, in the character's voice.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "turns": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "role": {"type": "string", "enum": ["user", "assistant"]},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["role", "content"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["turns"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["conversations"],
+    "additionalProperties": False,
+}
+
+# Offered in the UI. Opus is the default: every generated example either
+# sharpens the character or dilutes them, and holding a subtle voice across
+# hundreds of exchanges is exactly where model quality shows.
+CLAUDE_MODELS = [
+    {"id": "claude-opus-4-8", "label": "Claude Opus 4.8 — best voice fidelity"},
+    {"id": "claude-sonnet-5", "label": "Claude Sonnet 5 — near-Opus, cheaper"},
+    {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5 — cheapest, bulk"},
+]
+
+
 class ExpandRequest(BaseModel):
     count: int = 8
     model: Optional[str] = None
     topic_hint: str = ""
     temperature: float = 0.9
+    provider: str = "ollama"          # ollama | claude
 
 
 def _parse_conversations(text: str) -> list[list[dict[str, str]]]:
@@ -186,8 +231,81 @@ def _parse_conversations(text: str) -> list[list[dict[str, str]]]:
     return []
 
 
+async def _expand_with_claude(system: str, ask: str, model: str, api_key: str,
+                             count: int) -> list[list[dict[str, str]]]:
+    """Generate via the Anthropic API, with the shape enforced server-side."""
+    import anthropic
+
+    client = anthropic.AsyncAnthropic(api_key=api_key)
+    try:
+        # No temperature/top_p — those are rejected on Opus 4.8 and Sonnet 5.
+        # Steering happens through the brief and the seed examples instead.
+        message = await client.messages.create(
+            model=model,
+            max_tokens=16000,
+            system=system,
+            thinking={"type": "adaptive"},
+            output_config={"format": {"type": "json_schema", "schema": CONVERSATIONS_SCHEMA}},
+            messages=[{"role": "user", "content": ask}],
+        )
+    except anthropic.AuthenticationError:
+        raise HTTPException(401, "That Anthropic API key was rejected. Check it in Settings.")
+    except anthropic.RateLimitError:
+        raise HTTPException(429, "Anthropic rate limit hit. Wait a moment, or generate fewer at once.")
+    except anthropic.APIStatusError as e:
+        raise HTTPException(502, f"Anthropic API error ({e.status_code}): {e.message}")
+    except anthropic.APIConnectionError as e:
+        raise HTTPException(502, f"Couldn't reach the Anthropic API: {e}")
+    finally:
+        await client.close()
+
+    # A refusal returns HTTP 200 with empty content — check before reading it.
+    if message.stop_reason == "refusal":
+        raise HTTPException(
+            422,
+            "Claude declined this request. That usually means something in the character "
+            "brief or seeds reads as disallowed content — revise and try again.",
+        )
+
+    text = "".join(b.text for b in message.content if b.type == "text")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return _parse_conversations(text)
+
+    out: list[list[dict[str, str]]] = []
+    for conv in payload.get("conversations", []):
+        turns = [{"role": t["role"], "content": t["content"].strip()}
+                 for t in conv.get("turns", []) if t.get("content", "").strip()]
+        if len(turns) >= 2 and turns[-1]["role"] == "assistant":
+            out.append(turns)
+    return out[:max(count, 1) * 2]
+
+
+@router.get("/teachers")
+async def teachers(x_anthropic_key: Optional[str] = Header(None)):
+    """Which teacher models are usable right now, per provider."""
+    import httpx as _httpx
+    ollama: list[str] = []
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{OLLAMA_URL}/api/tags")
+            r.raise_for_status()
+            ollama = [m["name"] for m in r.json().get("models", [])]
+    except Exception:
+        pass
+    return {
+        "ollama": {"available": bool(ollama), "models": ollama, "default": OLLAMA_MODEL},
+        "claude": {
+            "available": bool(get_anthropic_api_key(x_anthropic_key)),
+            "models": CLAUDE_MODELS,
+            "default": CLAUDE_MODELS[0]["id"],
+        },
+    }
+
+
 @router.post("/expand")
-async def expand(req: ExpandRequest):
+async def expand(req: ExpandRequest, x_anthropic_key: Optional[str] = Header(None)):
     """Generate candidate exchanges from the seeds. Nothing is saved."""
     data = _load()
     seeds = data["seeds"]
@@ -209,13 +327,26 @@ async def expand(req: ExpandRequest):
     if req.topic_hint.strip():
         ask += f" Focus on situations involving: {req.topic_hint.strip()}."
 
+    prompt = f"{brief}\n\n{ask}"
+
+    if req.provider == "claude":
+        api_key = get_anthropic_api_key(x_anthropic_key)
+        if not api_key:
+            raise HTTPException(401, "No Anthropic API key. Add one in Settings to use Claude as the teacher.")
+        model = req.model or CLAUDE_MODELS[0]["id"]
+        convs = await _expand_with_claude(EXPAND_SYSTEM, prompt, model, api_key, req.count)
+        if not convs:
+            raise HTTPException(502, "Claude returned no usable exchanges. Try again, or lower the count.")
+        return {"candidates": [{"turns": c} for c in convs], "model": model,
+                "provider": "claude", "asked_for": req.count, "got": len(convs)}
+
     model = req.model or OLLAMA_MODEL
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(f"{OLLAMA_URL}/api/chat", json={
                 "model": model,
                 "messages": [{"role": "system", "content": EXPAND_SYSTEM},
-                             {"role": "user", "content": f"{brief}\n\n{ask}"}],
+                             {"role": "user", "content": prompt}],
                 "stream": False,
                 "options": {"temperature": req.temperature},
             })
@@ -236,7 +367,7 @@ async def expand(req: ExpandRequest):
             "format — try a larger one, or lower the count.",
         )
     return {"candidates": [{"turns": c} for c in convs], "model": model,
-            "asked_for": req.count, "got": len(convs)}
+            "provider": "ollama", "asked_for": req.count, "got": len(convs)}
 
 
 class AcceptRequest(BaseModel):

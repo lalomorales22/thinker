@@ -17,6 +17,8 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
   // Draft state — initialized from the store, only committed on Save so Cancel truly discards.
   const store = useStore()
   const [draftKey, setDraftKey] = useState(store.apiKey)
+  const [draftAnthropic, setDraftAnthropic] = useState(store.anthropicKey)
+  const [showAnthropic, setShowAnthropic] = useState(false)
   const [draftUrl, setDraftUrl] = useState(store.backendUrl)
   const [draftModel, setDraftModel] = useState(store.ollamaModel)
   const [showKey, setShowKey] = useState(false)
@@ -44,6 +46,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
 
   function save() {
     store.setApiKey(draftKey.trim())
+    store.setAnthropicKey(draftAnthropic.trim())
     store.setBackendUrl(draftUrl.trim() || 'http://localhost:8000')
     store.setOllamaModel(draftModel)
     toast('Settings saved')
@@ -109,6 +112,49 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                 className="absolute right-1 top-1/2 -translate-y-1/2"
               >
                 {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </IconButton>
+            </div>
+          </Field>
+        </section>
+
+        {/* Anthropic API key — optional, Voice page only */}
+        <section className="space-y-2.5">
+          <div className="flex items-center gap-2">
+            <span className="w-8 h-8 rounded-lg bg-line-soft text-ink-soft flex items-center justify-center">
+              <KeyRound className="w-4 h-4" />
+            </span>
+            <h3 className="font-display font-bold text-ink">Anthropic API key</h3>
+            <Badge tone="outline">optional</Badge>
+          </div>
+          <Field
+            hint={
+              <>
+                Only used on the <b>Voice</b> page, to expand your character with Claude instead of a
+                local model — far better at holding a voice, and fast enough to generate thousands of
+                examples in minutes. Billed by Anthropic, separately from your Tinker credits
+                (roughly a few dollars per thousand exchanges).{' '}
+                <a className="link" href="https://platform.claude.com/" target="_blank" rel="noreferrer">
+                  where do I get a key?
+                </a>
+              </>
+            }
+          >
+            <div className="relative">
+              <Input
+                type={showAnthropic ? 'text' : 'password'}
+                value={draftAnthropic}
+                onChange={(e) => setDraftAnthropic(e.target.value)}
+                placeholder="sk-ant-…"
+                autoComplete="off"
+                spellCheck={false}
+                className="pr-11 font-mono"
+              />
+              <IconButton
+                label={showAnthropic ? 'Hide key' : 'Show key'}
+                onClick={() => setShowAnthropic((s) => !s)}
+                className="absolute right-1 top-1/2 -translate-y-1/2"
+              >
+                {showAnthropic ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </IconButton>
             </div>
           </Field>

@@ -42,6 +42,9 @@ interface Store {
   // settings (persisted)
   apiKey: string
   setApiKey: (v: string) => void
+  /** Optional — only used for the Claude teacher on the Voice page. */
+  anthropicKey: string
+  setAnthropicKey: (v: string) => void
   backendUrl: string
   setBackendUrl: (v: string) => void
   ollamaModel: string
@@ -73,6 +76,8 @@ export const useStore = create<Store>((set) => ({
 
   apiKey: ls('tinker_api_key'),
   setApiKey: (v) => { save('tinker_api_key', v); set({ apiKey: v }) },
+  anthropicKey: ls('anthropic_api_key'),
+  setAnthropicKey: (v) => { save('anthropic_api_key', v); set({ anthropicKey: v }) },
   backendUrl: defaultBackendUrl(),
   setBackendUrl: (v) => { save('backend_url', v); set({ backendUrl: v }) },
   ollamaModel: ls('ollama_model', ''),

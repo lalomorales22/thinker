@@ -95,15 +95,17 @@ function settings() {
   // with a localStorage fallback for the very first call before hydration.
   try {
     const s = useStore.getState()
-    return { baseUrl: s.backendUrl, apiKey: s.apiKey }
+    return { baseUrl: s.backendUrl, apiKey: s.apiKey, anthropicKey: s.anthropicKey }
   } catch {
     return {
-      baseUrl: localStorage.getItem('backend_url') ?? 'http://localhost:8000',
+      baseUrl: localStorage.getItem('backend_url') ?? BACKEND_FALLBACK,
       apiKey: localStorage.getItem('tinker_api_key') ?? '',
+      anthropicKey: localStorage.getItem('anthropic_api_key') ?? '',
     }
   }
 }
 
+const BACKEND_FALLBACK = 'http://127.0.0.1:8000'
 const OFFLINE = Symbol.for('thinker.offline')
 
 /** The backend didn't answer at all — as opposed to answering with an error. */
@@ -149,7 +151,7 @@ interface RequestOpts {
 }
 
 async function request<T = any>(path: string, opts: RequestOpts = {}): Promise<T> {
-  const { baseUrl, apiKey } = settings()
+  const { baseUrl, apiKey, anthropicKey } = settings()
 
   let url = `${baseUrl.replace(/\/+$/, '')}${path}`
   if (opts.query) {
@@ -163,6 +165,8 @@ async function request<T = any>(path: string, opts: RequestOpts = {}): Promise<T
 
   const headers: Record<string, string> = {}
   if (apiKey) headers['X-API-Key'] = apiKey
+  // Optional, and only read by the Voice page's Claude teacher.
+  if (anthropicKey) headers['X-Anthropic-Key'] = anthropicKey
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
 
   let res: Response
@@ -314,8 +318,12 @@ export const api = {
       request<any>('/api/seeds/seed', { body }),
     remove: (id: string) =>
       request<any>(`/api/seeds/seed/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-    expand: (body: { count: number; model?: string; topic_hint?: string; temperature?: number }) =>
-      request<any>('/api/seeds/expand', { body }),
+    /** Which teacher models are usable right now, per provider. */
+    teachers: () => request<any>('/api/seeds/teachers'),
+    expand: (body: {
+      count: number; model?: string; topic_hint?: string
+      temperature?: number; provider?: 'ollama' | 'claude'
+    }) => request<any>('/api/seeds/expand', { body }),
     accept: (body: { candidates: { turns: { role: string; content: string }[] }[] }) =>
       request<any>('/api/seeds/accept', { body }),
     toDataset: (body: { name?: string; include_expanded?: boolean }) =>

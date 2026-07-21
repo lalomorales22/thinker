@@ -5,7 +5,7 @@ import { useAsync } from '../lib/hooks'
 import { useStore } from '../store/useStore'
 import { cn, fmtInt } from '../lib/util'
 import {
-  Button, IconButton, Card, Badge, Field, Input, Textarea, Select,
+  Button, IconButton, Card, Badge, Field, Input, Textarea, Select, Segmented,
   EmptyState, Spinner, toast,
 } from '../components/ui'
 
@@ -59,13 +59,14 @@ export default function Voice() {
   const setView = useStore(s => s.setView)
   const bump = useStore(s => s.bump)
   const data = useAsync<SeedsData>(() => api.seeds.all(), [])
-  const status = useAsync<any>(() => api.assistant.status(), [])
+  const teachers = useAsync<any>(() => api.seeds.teachers(), [])
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [draft, setDraft] = useState<Turn[]>(BLANK)
   const [editing, setEditing] = useState<string | null>(null)
 
+  const [provider, setProvider] = useState<'ollama' | 'claude'>('ollama')
   const [model, setModel] = useState('')
   const [count, setCount] = useState(5)
   const [hint, setHint] = useState('')
@@ -76,14 +77,25 @@ export default function Voice() {
   useEffect(() => {
     if (data.data) { setName(data.data.name); setDescription(data.data.description) }
   }, [data.data])
+  // Default to Claude when a key is present — it holds a voice far better than
+  // anything that fits on a laptop, and generation takes minutes not hours.
   useEffect(() => {
-    const ms: string[] = status.data?.models ?? []
-    if (!model && ms.length) {
+    if (teachers.data?.claude?.available) setProvider('claude')
+  }, [teachers.data])
+
+  useEffect(() => {
+    const t = teachers.data
+    if (!t) return
+    if (provider === 'claude') {
+      setModel(t.claude?.default ?? '')
+    } else {
+      const ms: string[] = t.ollama?.models ?? []
       // Prefer a small local instruct model: reasoning models spend their
       // output on thinking tokens and return nothing usable here.
-      setModel(ms.find(m => m.startsWith('llama3.2')) ?? ms.find(m => !m.includes('cloud')) ?? ms[0])
+      setModel(ms.find((m: string) => m.startsWith('llama3.2'))
+        ?? ms.find((m: string) => !m.includes('cloud')) ?? ms[0] ?? '')
     }
-  }, [status.data])
+  }, [teachers.data, provider])
 
   const seeds = data.data?.seeds ?? []
   const counts = data.data?.counts ?? { total: 0, hand: 0, expanded: 0 }
@@ -111,7 +123,7 @@ export default function Voice() {
   async function expand() {
     setExpanding(true); setCandidates(null); setRejected(new Set())
     try {
-      const r = await api.seeds.expand({ count, model, topic_hint: hint })
+      const r = await api.seeds.expand({ count, model, topic_hint: hint, provider })
       setCandidates(r.candidates.map((c: any) => c.turns))
       if (r.got < r.asked_for) toast(`Got ${r.got} of ${r.asked_for} — smaller models drift.`, 'info')
     } catch (e: any) { toast(e.message, 'error') } finally { setExpanding(false) }
@@ -242,20 +254,49 @@ export default function Voice() {
           <h3 className="font-display font-bold text-ink">Expand with a local model</h3>
         </div>
 
-        {status.data?.available === false ? (
+        {!teachers.data?.ollama?.available && !teachers.data?.claude?.available ? (
           <p className="text-sm text-berry-ink">
-            Ollama isn’t running. Start it with <span className="font-mono">ollama serve</span>.
+            No teacher available. Start Ollama with <span className="font-mono">ollama serve</span>,
+            or add an Anthropic API key in Settings.
           </p>
         ) : (
           <>
+            <Field label="Who does the expanding?"
+              hint={provider === 'claude'
+                ? 'Billed by Anthropic, separately from your Tinker credits — roughly a few dollars per thousand exchanges, and minutes rather than hours.'
+                : 'Free and fully local, but a laptop manages only a few tokens a second.'}>
+              <Segmented<'ollama' | 'claude'>
+                value={provider}
+                onChange={setProvider}
+                options={[
+                  { value: 'ollama', label: 'Local (Ollama)' },
+                  { value: 'claude', label: 'Claude' },
+                ]}
+              />
+            </Field>
+
+            {provider === 'claude' && !teachers.data?.claude?.available && (
+              <p className="text-sm text-amber-ink">
+                No Anthropic API key yet — add one in Settings to use Claude.
+              </p>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Field label="Teacher model"
-                hint="Small instruct models work best. Reasoning models spend their output thinking and return nothing.">
+                hint={provider === 'claude'
+                  ? 'Opus holds a subtle voice best; Haiku is cheapest for bulk.'
+                  : 'Small instruct models work best. Reasoning models spend their output thinking and return nothing.'}>
                 <Select value={model} onChange={e => setModel(e.target.value)}>
-                  {(status.data?.models ?? []).map((m: string) => <option key={m} value={m}>{m}</option>)}
+                  {provider === 'claude'
+                    ? (teachers.data?.claude?.models ?? []).map((m: any) =>
+                        <option key={m.id} value={m.id}>{m.label}</option>)
+                    : (teachers.data?.ollama?.models ?? []).map((m: string) =>
+                        <option key={m} value={m}>{m}</option>)}
                 </Select>
               </Field>
-              <Field label="How many?" hint="Generation is slow on a laptop — small batches.">
+              <Field label="How many?" hint={provider === 'claude'
+                ? 'Claude handles large batches comfortably.'
+                : 'Generation is slow on a laptop — small batches.'}>
                 <Input type="number" min={1} max={30} value={count}
                   onChange={e => setCount(Number(e.target.value) || 1)} />
               </Field>
@@ -264,7 +305,8 @@ export default function Voice() {
                   placeholder="grief, small wins, 2am spirals" />
               </Field>
             </div>
-            <Button size="sm" loading={expanding} disabled={counts.total < 3}
+            <Button size="sm" loading={expanding}
+              disabled={counts.total < 3 || (provider === 'claude' && !teachers.data?.claude?.available)}
               icon={<Sparkles className="w-4 h-4" />} onClick={expand}>
               {counts.total < 3 ? 'Write 3 seeds first' : 'Generate candidates'}
             </Button>

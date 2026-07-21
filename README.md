@@ -54,10 +54,18 @@ built-in **Demo mode** lets you try the whole flow with no API key and no cost.
   because a teacher drifts toward its own voice and unreviewed drift is exactly
   how a character becomes a generic assistant with a name.
 
-  Two things learned the hard way on an M1: use a small **instruct** model
-  (llama3.2 works; reasoning models spend their whole output on thinking tokens
-  and return nothing), and generate in small batches — a laptop manages a few
-  tokens a second.
+  Two teachers are supported. **Local Ollama** is free and stays on your
+  machine, but an M1 manages a few tokens a second — and use a small *instruct*
+  model, since reasoning models spend their whole output on thinking tokens and
+  return nothing. **Claude** (optional Anthropic key in Settings) holds a subtle
+  voice far better and generates thousands of exchanges in minutes rather than
+  hours; it also uses structured outputs, so the reply is guaranteed to parse
+  instead of being scraped out of fenced prose. Billed by Anthropic separately
+  from your Tinker credits — roughly a few dollars per thousand exchanges.
+
+  Quality compounds here: every generated example either sharpens the character
+  or dilutes them, which is why the teacher is worth paying for even though the
+  local one is free.
 - **Train for real** — three genuinely-implemented methods:
   - **Supervised** — teach by example (prompt → answer).
   - **Preference (DPO)** — teach what's *better* (chosen vs. rejected), via a real
@@ -163,7 +171,11 @@ npm install && npm run dev
   Real training also needs the `tinker` + `tinker_cookbook` Python packages
   (installed from `requirements.txt`).
 - **Optional:** [Ollama](https://ollama.ai) running locally makes the in-app
-  training assistant conversational (otherwise it uses a simple built-in helper).
+  training assistant conversational (otherwise it uses a simple built-in helper),
+  and can act as a free teacher on the Voice page.
+- **Optional:** an [Anthropic](https://platform.claude.com/) API key enables
+  Claude as the Voice teacher. Separate billing from Tinker; used nowhere else
+  in the app, and never required.
 
 ## Troubleshooting
 
