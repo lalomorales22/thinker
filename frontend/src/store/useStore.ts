@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type ViewType = 'home' | 'train' | 'data' | 'models' | 'playground' | 'analytics' | 'arena'
+export type ViewType = 'home' | 'train' | 'data' | 'models' | 'playground' | 'analytics' | 'arena' | 'export'
 
 const ls = (k: string, d = '') => localStorage.getItem(k) ?? d
 const save = (k: string, v: string) => localStorage.setItem(k, v)

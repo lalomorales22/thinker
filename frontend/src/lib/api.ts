@@ -284,6 +284,15 @@ export const api = {
       request<Record<string, any>>('/api/assistant/suggest-config', { body }),
   },
 
+  /** Export a fine-tune to MLX for on-device (iPhone) use. */
+  export: {
+    /** Will it fit on a phone, and can this machine do the conversion? */
+    preflight: (modelId: string) => request<any>('/api/export/preflight', { query: { model_id: modelId } }),
+    start: (modelId: string, bits: number) =>
+      request<any>('/api/export/start', { body: { model_id: modelId, bits } }),
+    job: (id: string) => request<any>(`/api/export/jobs/${encodeURIComponent(id)}`),
+  },
+
   hf: {
     search: (query: string, limit = 12) =>
       request<{ datasets: any[] }>('/api/huggingface/search', { query: { query, limit } }),
