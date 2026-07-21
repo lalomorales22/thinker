@@ -14,6 +14,19 @@ built-in **Demo mode** lets you try the whole flow with no API key and no cost.
 - **Add data three ways** — upload a file (`.jsonl` / `.json` / `.csv`), type
   examples by hand, or import a dataset straight from **Hugging Face**. Thinker
   validates it against the training type and tells you exactly what to fix.
+- **See inside a file before importing it** — uploading runs
+  **inspect → map → preview → commit**. Thinker reads the file into a staging
+  area and reports what it found: the columns, which training type it can feed,
+  and the *actual converted examples* a field mapping would produce. Nothing is
+  written to your dataset list until you've seen it, and backing out discards
+  the staged copy.
+- **Credential scanning, before anything leaves your machine** — training data
+  is uploaded to Tinker, and whatever a model memorises can resurface in its
+  output later. So every ingest is scanned for API keys, tokens, private keys
+  and passwords. Findings are shown **redacted**, with a choice of redacting
+  them, dropping those rows, or importing as-is. It's tuned for precision over
+  recall — a scanner that cries wolf gets ignored — so it passes over things
+  like `api_key = your-api-key-here`.
 - **Find a dataset without guessing** — the Hugging Face importer opens on a
   goal-first shortlist ("make it follow instructions", "match my tone"), and
   every suggestion *and* search result is checked live against the Hub before
@@ -36,6 +49,24 @@ built-in **Demo mode** lets you try the whole flow with no API key and no cost.
   with real RL (tournament or evolutionary "swarm"), ranked on a live leaderboard.
 - **Live model catalog** — the current Tinker base models with real pricing,
   context windows, and vision/reasoning badges (fetched from Tinker, not hardcoded).
+- **Export it to run on a phone** — Tinker keeps a fine-tune as a LoRA adapter in
+  its own storage. The **Export** page turns that into one set of merged,
+  quantized weights in **MLX** format, the one Apple Silicon and iOS run natively
+  (`weights.download` → `weights.build_hf_model` → `mlx_lm.convert -q`).
+
+  It preflights first, because merging loads the full base model in bf16 — a 4B
+  fine-tune means an ~8 GB download and ~9 GB of RAM, a 20B one means ~40 GB and
+  ~46 GB. So before downloading anything it answers two questions: **will the
+  result fit on a phone** (sizes at 4/6/8/16-bit against real iPhone memory
+  budgets), and **can this machine actually do the conversion** (disk, RAM,
+  Apple Silicon, mlx-lm). A job this machine can't finish is refused up front
+  rather than dying halfway through.
+
+  The numbers are deliberately unflattering: iOS only lets an app address part
+  of physical RAM, so a 12 GB phone is not a 12 GB budget, and sizes include
+  ~10% runtime headroom. Worth checking *before* you pick a base model — a 20B
+  MoE is ~11 GB at 4-bit and fits no iPhone at any quantization, because every
+  expert stays resident even when few are active.
 
 ## Architecture
 
@@ -45,9 +76,19 @@ model catalog (`catalog.py`), HuggingFace import wired straight into training, a
 WebSocket hub for live updates. Tinker imports are lazy, so the app boots and all
 non-training features work without the SDK installed.
 
+Shared data logic lives in `training/datautil.py` — schema validation, field
+mapping, and the "will this actually train?" fit check are written once and used
+by every importer, so the local-file and HuggingFace paths can't drift apart.
+`training/secrets.py` is the credential scanner, and `routes/export.py` handles
+the MLX export and its preflight.
+
 **Frontend** (`/frontend`) — React 18 + TypeScript + Vite + Tailwind. A friendly
 "studio" design system (black / orange / white), a plain-language glossary with
 tooltips on every training term, and Recharts for real loss/reward curves.
+
+Views recover from backend outages on their own: failed requests retry with a
+backoff, and when the live WebSocket reconnects, any view still showing an error
+refetches. Reloading the page is not the fix.
 
 ## Quick start
 
@@ -135,6 +176,25 @@ there automatically until you have models of your own.
 
 Search needs `huggingface-hub`, and the API changed in 1.x. If you're on a
 pinned older version, reinstall from `requirements.txt`.
+
+**Export says "this machine can't complete the export"**
+
+Working as intended — it checked before downloading. The usual blocker is disk:
+merging needs roughly 2.3× the base model's bf16 size (a 20B model wants ~92 GB).
+Free space up, or export a smaller base model. "RAM to merge" is a *warning*, not
+a blocker — it will still run, but it will swap and take considerably longer.
+
+**Export: "mlx-lm isn't installed"**
+
+Expected on a first run; the export installs it. MLX is Apple Silicon only, so
+the Export page won't work on an Intel Mac.
+
+**My upload says "needs field mapping"**
+
+Your columns aren't ones Thinker recognises (`prompt`/`completion`, or aliases
+like `instruction`/`response`). Use the mapping step to point each required
+field at the right column — the preview updates live, so you can see the real
+training examples before importing.
 
 **A training run needs a real key**
 
